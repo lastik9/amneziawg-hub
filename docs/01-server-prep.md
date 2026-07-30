@@ -81,7 +81,7 @@ ls -la ~/.ssh/id_ed25519      # есть → ключ уже готов, ген�
 Если файл есть — переходи сразу к 3.2 (заливке). Если `No such file or directory` — сгенерируй:
 
 ```bash
-ssh-keygen -t ed25519 -C "vadim@macbook" -f ~/.ssh/id_ed25519
+ssh-keygen -t ed25519 -C "user@laptop" -f ~/.ssh/id_ed25519
 ```
 
 - `ed25519` — современный, короткий, быстрый (не используй RSA-2048).
