@@ -1,12 +1,13 @@
 # Пример /etc/amnezia/amneziawg/awg0.conf — ОБЕЗЛИЧЕН.
-# Реальный файл рендерится scripts/awg-hub.sh из состояния. Ключи здесь — заглушки.
+# Реальный файл рендерится scripts/awg-hub.sh из состояния. Ключи здесь — заглушки,
+# адреса и подсети — пример (у всех свои).
 
 [Interface]
 Address = 10.0.0.1/24
 ListenPort = 443
 PrivateKey = <SERVER_PRIVATE_KEY>
 # маршруты на LAN-подсети узлов — syncconf их не создаёт, поэтому здесь:
-PostUp = ip route add 192.168.52.0/24 dev %i 2>/dev/null; ip route add 192.168.53.0/24 dev %i 2>/dev/null;
+PostUp = ip route add 192.168.1.0/24 dev %i 2>/dev/null; ip route add 192.168.52.0/24 dev %i 2>/dev/null; ip route add 192.168.53.0/24 dev %i 2>/dev/null;
 # профиль обфускации AWG 2.0 — байт-в-байт как у всех пиров
 Jc = 8
 Jmin = 24
@@ -21,12 +22,16 @@ H3 = 40000000-70000000
 H4 = 150000000-400000000
 I1 = <b 0xc000000001><r 64><t>
 
-[Peer]  # site A (LAN 192.168.52.0/24)
+[Peer]  # site A (LAN 192.168.1.0/24)
 PublicKey = <SITE_A_PUBLIC_KEY>
+AllowedIPs = 10.0.0.2/32, 192.168.1.0/24
+
+[Peer]  # site B (LAN 192.168.52.0/24)
+PublicKey = <SITE_B_PUBLIC_KEY>
 AllowedIPs = 10.0.0.3/32, 192.168.52.0/24
 
-[Peer]  # site B (LAN 192.168.53.0/24)
-PublicKey = <SITE_B_PUBLIC_KEY>
+[Peer]  # site C (LAN 192.168.53.0/24)
+PublicKey = <SITE_C_PUBLIC_KEY>
 AllowedIPs = 10.0.0.4/32, 192.168.53.0/24
 
 [Peer]  # роуминг-клиент
