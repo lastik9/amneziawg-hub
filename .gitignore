@@ -1,0 +1,16 @@
+# секреты и рантайм-состояние
+*.key
+*.priv
+server.pub
+hub.env
+peers/
+*.peer
+# клиентские конфиги содержат приватные ключи
+configs/clients/
+*.conf
+!configs/examples/*.conf.example
+# системный мусор
+*.log
+.DS_Store
+*.swp
+*~
