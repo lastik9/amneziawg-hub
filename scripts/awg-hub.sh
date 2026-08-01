@@ -264,14 +264,20 @@ step_system(){
     ok "Система обновлена."
   fi
 
-  # ── снос Docker (грабля #6): без опасного python3-* ──
-  if dpkg -l 2>/dev/null | grep -qE '^ii\s+(docker\.io|docker-ce|containerd)'; then
+  # ── снос Docker (грабля #6): сносим только РЕАЛЬНО установленные пакеты ──
+  # Не передаём в purge несуществующие имена (containerd.io и ко из docker.com-репо):
+  # иначе apt падает 'Unable to locate' и НЕ сносит даже стоящий docker.io.
+  mapfile -t _dockpkgs < <(dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E \
+    '^(docker\.io|docker-ce|docker-ce-cli|containerd|containerd\.io|docker-compose|docker-compose-plugin|docker-buildx-plugin|python3-docker)$' || true)
+  if [ "${#_dockpkgs[@]}" -gt 0 ]; then
     if confirm "Обнаружен Docker (мешает FORWARD) — снести?" "y"; then
-      apt-get -y purge docker.io docker-ce docker-ce-cli containerd containerd.io \
-        docker-compose docker-compose-plugin docker-buildx-plugin python3-docker 2>/dev/null || \
-        warn "Часть docker-пакетов не удалилась — проверь вручную (грабля #6: реинстолл→purge)."
+      apt-get -y purge "${_dockpkgs[@]}" || warn "Часть docker-пакетов не удалилась — проверь вручную."
       apt-get -y autoremove --purge || true
-      ok "Docker удалён (python3-* НЕ трогали)."
+      # DOCKER-цепочки в FORWARD демон создаёт в рантайме — после purge остаются до ребута
+      if iptables -S FORWARD 2>/dev/null | grep -qi docker; then
+        warn "DOCKER-цепочки ещё висят в FORWARD — нужен REBOOT, иначе маршрутизация пиров сломается (грабля #6)."
+      fi
+      ok "Docker удалён (python3-* целиком НЕ трогали)."
     fi
   fi
 
