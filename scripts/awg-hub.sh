@@ -16,6 +16,7 @@
 #
 set -Eeuo pipefail
 shopt -s nullglob
+umask 077                 # приватные ключи (server.key, пиры) создаются с правами 600, не world-readable
 
 # ─────────────────────────── пути и константы ───────────────────────────
 IFACE="awg0"
@@ -251,7 +252,7 @@ step_collect_params(){
     command -v awg >/dev/null || { warn "awg ещё не установлен — ключ сгенерирую после установки пакетов."; : ; }
     if command -v awg >/dev/null; then awg genkey > "$SRV_KEY"; ok "Сгенерирован новый ключ сервера."; fi
   fi
-  if [ -f "$SRV_KEY" ]; then chmod 600 "$SRV_KEY"; fi
+  [ -f "$SRV_KEY" ] && chmod 600 "$SRV_KEY"
 }
 
 step_system(){
@@ -569,9 +570,8 @@ status(){
 main_menu(){
   while true; do
     clear 2>/dev/null || true
-    printf '%s╔══════════════════════════════════════════╗%s\n' "$c_mag$c_bold" "$c_reset"
-    printf '%s║   AmneziaWG HUB — управление (Ubuntu)     ║%s\n' "$c_mag$c_bold" "$c_reset"
-    printf '%s╚══════════════════════════════════════════╝%s\n' "$c_mag$c_bold" "$c_reset"
+    printf '%s  AmneziaWG HUB — управление (Ubuntu)%s\n' "$c_mag$c_bold" "$c_reset"
+    hr
     if load_meta 2>/dev/null; then
       printf '  %sхаб настроен%s: %s:%s  (%s)\n' "$c_grn" "$c_reset" "$ENDPOINT" "$PORT" "$WG_NET"
     else
