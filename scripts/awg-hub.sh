@@ -251,7 +251,7 @@ step_collect_params(){
     command -v awg >/dev/null || { warn "awg ещё не установлен — ключ сгенерирую после установки пакетов."; : ; }
     if command -v awg >/dev/null; then awg genkey > "$SRV_KEY"; ok "Сгенерирован новый ключ сервера."; fi
   fi
-  [ -f "$SRV_KEY" ] && chmod 600 "$SRV_KEY"
+  if [ -f "$SRV_KEY" ]; then chmod 600 "$SRV_KEY"; fi
 }
 
 step_system(){
