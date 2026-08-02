@@ -58,13 +58,15 @@ title(){ printf '\n%s%s%s\n' "$c_bold$c_mag" "$*" "$c_reset"; hr; }
 
 # ask "вопрос" "дефолт"  → печатает ответ в stdout (промпт идёт в stderr, чтобы не попасть в подстановку)
 ask(){
-  local p="$1" d="${2:-}" a
+  local p="$1" d="${2:-}" h="${3:-}" a
+  [ -n "$h" ] && printf '%s  \xe2\x86\xb3 %s%s\n' "$c_dim" "$h" "$c_reset"
   if [ -n "$d" ]; then read -rp "$(printf '%s%s%s [%s]: ' "$c_bold" "$p" "$c_reset" "$d")" a; printf '%s' "${a:-$d}"
   else read -rp "$(printf '%s%s%s: ' "$c_bold" "$p" "$c_reset")" a; printf '%s' "$a"; fi
 }
 # confirm "вопрос" "y|n"  → 0 если да
 confirm(){
-  local p="$1" d="${2:-y}" a hint
+  local p="$1" d="${2:-y}" h="${3:-}" a hint
+  [ -n "$h" ] && printf '%s  \xe2\x86\xb3 %s%s\n' "$c_dim" "$h" "$c_reset"
   [ "$d" = y ] && hint="[Y/n]" || hint="[y/N]"
   read -rp "$(printf '%s%s%s %s: ' "$c_bold" "$p" "$c_reset" "$hint")" a
   a="${a:-$d}"
@@ -137,7 +139,7 @@ EOF
 # ─────────────────────────── работа с пирами (файлы состояния) ───────────────────────────
 # каждый пир: $PEERS_DIR/<name>.peer  с полями NAME PUBKEY WG_IP [SUBNET] [PSK] TYPE(client|site)
 
-gather_subnets(){ local f; for f in "$PEERS_DIR"/*.peer; do ( . "$f"; [ -n "${SUBNET:-}" ] && echo "$SUBNET" ); done; }
+gather_subnets(){ local f; for f in "$PEERS_DIR"/*.peer; do ( . "$f"; [ -n "${SUBNET:-}" ] && echo "$SUBNET"; true ); done; }
 gather_used_ips(){ local f; for f in "$PEERS_DIR"/*.peer; do ( . "$f"; echo "$WG_IP" ); done; }
 
 next_ip(){   # следующий свободный хост в /24 (сервер и занятые исключены)
@@ -216,21 +218,22 @@ step_collect_params(){
   echo "Режим:"
   echo "  1) Пересобрать существующий хаб (по возможности сохранить старый ключ сервера)"
   echo "  2) Новый независимый хаб (сгенерировать всё заново)"
-  mode="$(ask "Выбор" "$([ -f "$META" ] && echo 1 || echo 2)")"
+  mode="$(ask "Выбор" "$([ -f "$META" ] && echo 1 || echo 2)" '1 = сохранить текущий ключ хаба, выданные QR/конфиги продолжат работать. 2 = сгенерировать всё заново, ВСЕ пиры придётся перевыпустить.')"
 
   # если метаданные уже есть — подставляем их как дефолты
   load_meta || true
-  WG_NET="$(ask 'WG-подсеть (CIDR)' "${WG_NET:-$DEF_WG_NET}")"
+  WG_NET="$(ask 'WG-подсеть (CIDR)' "${WG_NET:-$DEF_WG_NET}" 'Внутренняя сеть меша. Меняй, только если 10.0.0.0/24 конфликтует с локалкой. Enter — оставить как есть.')"
   WG_PREFIX="${WG_NET#*/}"; [ "$WG_PREFIX" = "$WG_NET" ] && WG_PREFIX=24
-  WG_ADDR="$(ask 'Адрес сервера в WG' "${WG_ADDR:-$DEF_WG_ADDR}")"
-  PORT="$(ask 'UDP-порт (маскировка под QUIC = 443)' "${PORT:-$DEF_PORT}")"
+  WG_ADDR="$(ask 'Адрес сервера в WG' "${WG_ADDR:-$DEF_WG_ADDR}" 'IP хаба внутри меша (обычно .1). Пиры пингуют его как шлюз. Enter — оставить.')"
+  PORT="$(ask 'UDP-порт (маскировка под QUIC = 443)' "${PORT:-$DEF_PORT}" 'Порт, куда стучатся пиры. 443 маскирует трафик под QUIC/HTTPS и реже режется DPI. Enter — 443.')"
 
   local det; det="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
-  ENDPOINT="$(ask 'Публичный endpoint (белый IP/хост)' "${ENDPOINT:-$det}")"
+  ENDPOINT="$(ask 'Публичный endpoint (белый IP/хост)' "${ENDPOINT:-$det}" 'Белый IP/хост хаба — его пиры пишут в Endpoint. Определён автоматически; меняй, только если он неверный.')"
   [ -n "$ENDPOINT" ] || die "Endpoint обязателен."
 
   title "Профиль обфускации AWG 2.0"
-  info "Дефолты из хэндоффа (проверены на живом DPI). Enter = принять."
+  info "Дефолты из хэндоффа (проверены на живом DPI). Enter = принять каждый."
+  info "ВАЖНО: эти 15 значений должны совпадать БАЙТ-В-БАЙТ на хабе и всех пирах, иначе туннель не поднимется. Не меняй без причины — просто жми Enter."
   JC="$(ask   'Jc'   "${JC:-$DEF_JC}")";     JMIN="$(ask 'Jmin' "${JMIN:-$DEF_JMIN}")"; JMAX="$(ask 'Jmax' "${JMAX:-$DEF_JMAX}")"
   S1="$(ask   'S1'   "${S1:-$DEF_S1}")";     S2="$(ask   'S2'   "${S2:-$DEF_S2}")"
   S3="$(ask   'S3'   "${S3:-$DEF_S3}")";     S4="$(ask   'S4'   "${S4:-$DEF_S4}")"
@@ -242,9 +245,9 @@ step_collect_params(){
   title "Ключ сервера"
   mkdir -p "$META_DIR"; chmod 700 "$META_DIR"
   local reuse_default="n"; [ "$mode" = 1 ] && reuse_default="y"
-  if [ -f "$SRV_KEY" ] && confirm "Найден существующий ключ сервера — оставить его?" "y"; then
+  if [ -f "$SRV_KEY" ] && confirm "Найден существующий ключ сервера — оставить его?" "y" "Enter/Y = все выданные QR и конфиги продолжат работать. N = ключ сменится, пиров придётся перевыпускать."; then
     :
-  elif [ "$mode" = 1 ] && confirm "Вставить СТАРЫЙ приватный ключ (чтобы пиры не переконфигурировать)?" "$reuse_default"; then
+  elif [ "$mode" = 1 ] && confirm "Вставить СТАРЫЙ приватный ключ (чтобы пиры не переконфигурировать)?" "$reuse_default" "Есть бэкап старого приватного ключа хаба? Вставишь — пиры не трогаем. Нет — будет сгенерирован новый."; then
     local k; k="$(ask 'Приватный ключ сервера (base64)' '')"
     [ -n "$k" ] || die "Пустой ключ."
     printf '%s\n' "$k" > "$SRV_KEY"
@@ -257,7 +260,7 @@ step_collect_params(){
 
 step_system(){
   title "Система: обновление и утилиты"
-  if confirm "apt update && full-upgrade сейчас?" "y"; then
+  if confirm "apt update && full-upgrade сейчас?" "y" "Обновит систему и поставит зависимости (ufw, fail2ban, awg). Безопасно; может занять минуту. N — пропустить, если только что обновлялся."; then
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
     apt-get -y full-upgrade
@@ -270,7 +273,7 @@ step_system(){
   mapfile -t _dockpkgs < <(dpkg-query -W -f='${Package}\n' 2>/dev/null | grep -E \
     '^(docker\.io|docker-ce|docker-ce-cli|containerd|containerd\.io|docker-compose|docker-compose-plugin|docker-buildx-plugin|python3-docker)$' || true)
   if [ "${#_dockpkgs[@]}" -gt 0 ]; then
-    if confirm "Обнаружен Docker (мешает FORWARD) — снести?" "y"; then
+    if confirm "Обнаружен Docker (мешает FORWARD) — снести?" "y" "Docker ставит свои iptables-правила FORWARD и ломает маршрутизацию меша. Y — удалить (если сервер только под хаб). N — оставить, но меш может не форвардить."; then
       apt-get -y purge "${_dockpkgs[@]}" || warn "Часть docker-пакетов не удалилась — проверь вручную."
       apt-get -y autoremove --purge || true
       # DOCKER-цепочки в FORWARD демон создаёт в рантайме — после purge остаются до ребута
@@ -325,7 +328,7 @@ step_firewall(){
 step_ssh_hardening(){
   title "SSH-хардненинг (безопасный)"
   local sshp="$1"
-  confirm "Применить SSH-хардненинг (только ключи, root по ключу)?" "y" || { warn "Пропущено по запросу."; return; }
+  confirm "Применить SSH-хардненинг (только ключи, root по ключу)?" "y" "Отключит вход по паролю — останется только по SSH-ключу. УБЕДИСЬ, что твой ключ уже работает, иначе закроешь себе доступ! N — оставить как есть." || { warn "Пропущено по запросу."; return; }
 
   # гарантируем наличие хотя бы одного authorized_key ПЕРЕД отключением пароля
   local akf="/root/.ssh/authorized_keys"
@@ -365,7 +368,7 @@ EOF
 
 bootstrap(){
   step_collect_params
-  local sshp; sshp="$(ask 'SSH-порт (обычно 22)' '22')"
+  local sshp; sshp="$(ask 'SSH-порт (обычно 22)' '22' 'Порт, который откроем в файрволе под SSH. Оставь 22, если не менял вручную — иначе рискуешь потерять доступ к серверу.')"
   step_system
   # ключ мог появиться только сейчас — дособерём pubkey
   SERVER_PUB="$(awg pubkey < "$SRV_KEY")"
@@ -542,7 +545,7 @@ peers_menu(){
   3) + Site (OpenWrt со своей подсетью) — вводим их pubkey
   4) Показать .conf клиента заново
   5) Удалить пир
-  6) Назад
+  0) Назад
 EOF
     case "$(ask 'Выбор' '1')" in
       1) peer_list; pause ;;
@@ -550,7 +553,7 @@ EOF
       3) peer_add_site ;;
       4) peer_show_conf ;;
       5) peer_remove ;;
-      6) return ;;
+      0) return ;;
       *) warn "Не понял." ;;
     esac
   done
@@ -591,13 +594,13 @@ main_menu(){
   1) Установить / пересобрать хаб (bootstrap)
   2) Управление пирами
   3) Статус
-  4) Выход
+  0) Выход
 EOF
     case "$(ask 'Выбор' '1')" in
       1) bootstrap ;;
       2) peers_menu ;;
       3) status ;;
-      4) exit 0 ;;
+      0) exit 0 ;;
       *) warn "Не понял."; sleep 1 ;;
     esac
   done
