@@ -7,11 +7,17 @@
 
 ```
 IP хаба        = 138.16.178.138
-Ключ хаба      = YvN10L3GFD9vTQTJkGp043eCf2noTPHc2QdwVweP0U0=
+Ключ хаба      = <публичный ключ хаба — узнать на хабе: awg show awg0 public-key>
 Все сети меша  = 10.0.0.0/24, 192.168.1.0/24, 192.168.52.0/24, 192.168.53.0/24
 ```
 
 WG-адреса узлов по топологии: город `10.0.0.2`, деревня `10.0.0.3`, тест `10.0.0.4`.
+
+> **Ключ хаба забыл / переустановил сервер?** Посмотреть публичный ключ на хабе:
+> ```sh
+> awg show awg0 public-key
+> ```
+> Свежая переустановка хаба = новый ключ — перевыпусти его во всех `awg.env` узлов.
 
 ---
 
@@ -25,24 +31,27 @@ cat /tmp/node.pub /tmp/node.key
 cd /root && bash awg-hub.sh
 ```
 
-Один раз на всю жизнь хаба (соединять узлы между собой):
-
-```sh
-ufw route allow in on awg0 out on awg0
-```
+> Пир↔пир форвардинг на хабе (чтобы узлы видели друг друга и клиентов) `bootstrap` ставит сам — руками `ufw route allow ... awg0 awg0` добавлять не нужно.
 
 ---
 
-## Шаг 2 — на РОУТЕРЕ: поставить пакеты
+## Шаг 2 (опционально) — на РОУТЕРЕ: поставить пакеты вручную
 
-Определи `arch_target_subtarget` (из `apk update` или `ubus call system board`),
-подставь в `SFX`. Пример ниже — filogic/25.12.5.
+Обычно этот шаг **не нужен**: `setup-awg.sh` из Шага 4 (без `--no-install`) сам скачивает
+официальный установщик, который определяет архитектуру/версию и ставит пакеты. Ручная
+установка — фолбэк, если авто-установщик не прошёл (например, перехватчик на роутере).
+
+`SFX` определяется сам из `openwrt_release` + `ubus call system board`:
 
 ```sh
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY      # если на роутере ssclash
 cd /tmp
-BASE="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/v25.12.5"
-SFX="v25.12.5_aarch64_cortex-a53_mediatek_filogic.apk"   # ← свой
+. /etc/openwrt_release
+VER="$DISTRIB_RELEASE"; ARCH="$DISTRIB_ARCH"
+TGT="$(ubus call system board | sed -n 's/.*"target": *"\([^"]*\)".*/\1/p' | tr / _)"
+SFX="v${VER}_${ARCH}_${TGT}.apk"                          # ← вычислен автоматически
+BASE="https://github.com/Slava-Shchipunov/awg-openwrt/releases/download/v${VER}"
+echo "SFX=$SFX"
 for p in kmod-amneziawg amneziawg-tools luci-proto-amneziawg; do
   wget -O "$p.apk" "$BASE/${p}_${SFX}"
 done
@@ -81,7 +90,7 @@ H2='15000000-25000000'
 H3='40000000-70000000'
 H4='150000000-400000000'
 I1='<b 0xc000000001><r 64><t>'
-PEER_PUBLIC_KEY='YvN10L3GFD9vTQTJkGp043eCf2noTPHc2QdwVweP0U0='
+PEER_PUBLIC_KEY='<публичный ключ хаба: awg show awg0 public-key>'
 PRESHARED_KEY=''
 ENDPOINT_HOST='138.16.178.138'
 ENDPOINT_PORT='443'
@@ -97,10 +106,16 @@ EOF
 ## Шаг 4 — на РОУТЕРЕ: поднять узел одной командой
 
 ```sh
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY      # если на роутере ssclash
 cd /root
 wget -O setup-awg.sh "https://raw.githubusercontent.com/lastik9/awg-openwrt-setup/main/setup-awg.sh"
-sh setup-awg.sh --no-install --mesh
+sh setup-awg.sh --mesh
 ```
+
+> Без `--no-install` скрипт сам поставит пакеты (определит архитектуру/версию, скачает
+> официальный установщик). Если ты уже ставил пакеты вручную (Шаг 2), он это увидит и
+> установку пропустит. Флаг `--no-install` нужен, только если хочешь запретить установку явно.
+> Первый прогон попросит `reboot` — согласись.
 
 `--mesh` включает всё для меша: устройства за роутером видят весь меш и наоборот
 (forward, masq off, ICMP). Первый раз попросит **reboot** — соглашайся.
@@ -143,11 +158,15 @@ uci commit network && /etc/init.d/network reload
 
 ---
 
-## Если не работает — 4 частые причины
+## Если не работает — частые причины
 
 | Симптом | Причина | Лечение |
 |---|---|---|
 | Нет хендшейка | профиль обфускации не совпал | сверь `awg show` с хабом байт-в-байт |
 | `Port Unreachable` с хаба | masq на зоне awg | `--mesh` уже снял; вручную `uci set firewall.awg.masq=0` |
-| Узел↔хаб есть, узел↔узел нет | нет пир↔пир на хабе | `ufw route allow in on awg0 out on awg0` |
+| Узел↔хаб есть, узел↔узел нет | хаб не форвардит awg↔awg | `bootstrap` ставит правило сам; проверь `iptables -L ufw-user-forward -n -v \| grep awg0` (флаг `-v` обязателен) |
+| С хаба пинг узла есть, а его LAN нет | на хабе нет kernel-маршрута на LAN узла | пересобери хаб (меню 1) — `PostUp` пропишется в `awg0.conf` и переживёт ребут |
+| Узел отвалился после пересборки хаба | `syncconf` сбросил сессию, узел за NAT не достучался | на узле `ifdown awg0; ifup awg0` (пнуть новый хендшейк) |
+| Пинг узла есть, а LuCI/SSH из меша нет | `input=REJECT` у зоны `awg` (режет TCP на сам роутер) | точечно: правило `src=awg proto=tcp dest_port='22 80 443' target=ACCEPT`; или `uci set firewall.<awg-zone>.input=ACCEPT` |
+| Клиент (телефон) не видит LAN узла | клиентский `.conf` выдан до появления узла | в `AllowedIPs` конфига клиента добавь LAN узла и переимпортируй QR |
 | LAN своя видна, чужая нет | `ALLOWED_IPS` без чужих LAN | добавь все сети (шаг 3) |
