@@ -59,15 +59,18 @@ title(){ printf '\n%s%s%s\n' "$c_bold$c_mag" "$*" "$c_reset"; hr; }
 # ask "вопрос" "дефолт"  → печатает ответ в stdout (промпт идёт в stderr, чтобы не попасть в подстановку)
 ask(){
   local p="$1" d="${2:-}" h="${3:-}" a
-  [ -n "$h" ] && printf '%s  \xe2\x86\xb3 %s%s\n' "$c_dim" "$h" "$c_reset"
+  if [ -n "$h" ]; then
+    if [ -n "$d" ]; then printf '%s  \xe2\x86\xb3 %s (Enter = %s)%s\n' "$c_dim" "$h" "$d" "$c_reset"
+    else printf '%s  \xe2\x86\xb3 %s%s\n' "$c_dim" "$h" "$c_reset"; fi
+  fi
   if [ -n "$d" ]; then read -rp "$(printf '%s%s%s [%s]: ' "$c_bold" "$p" "$c_reset" "$d")" a; printf '%s' "${a:-$d}"
   else read -rp "$(printf '%s%s%s: ' "$c_bold" "$p" "$c_reset")" a; printf '%s' "$a"; fi
 }
 # confirm "вопрос" "y|n"  → 0 если да
 confirm(){
-  local p="$1" d="${2:-y}" h="${3:-}" a hint
-  [ -n "$h" ] && printf '%s  \xe2\x86\xb3 %s%s\n' "$c_dim" "$h" "$c_reset"
-  [ "$d" = y ] && hint="[Y/n]" || hint="[y/N]"
+  local p="$1" d="${2:-y}" h="${3:-}" a hint edef
+  [ "$d" = y ] && { hint="[Y/n]"; edef="да"; } || { hint="[y/N]"; edef="нет"; }
+  [ -n "$h" ] && printf '%s  \xe2\x86\xb3 %s (Enter = %s)%s\n' "$c_dim" "$h" "$edef" "$c_reset"
   read -rp "$(printf '%s%s%s %s: ' "$c_bold" "$p" "$c_reset" "$hint")" a
   a="${a:-$d}"
   [[ "$a" =~ ^[YyДд] ]]
