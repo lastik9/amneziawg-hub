@@ -371,9 +371,9 @@ bootstrap(){
   SERVER_PUB="$(awg pubkey < "$SRV_KEY")"
   step_sysctl
   apply                       # рендер + подъём awg0
+  save_meta                   # фиксируем мету СРАЗУ (до firewall/ssh — иначе обрыв на хардненинге теряет hub.env)
   step_firewall "$sshp"
   step_ssh_hardening "$sshp"
-  save_meta
 
   title "Хаб готов ✅"
   cat <<EOF
@@ -412,8 +412,10 @@ peer_add_client(){
   local name ip priv pub psk="" conf
   name="$(ask 'Имя (латиница, без пробелов)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
   [ -f "$PEERS_DIR/$name.peer" ] && { warn "Пир '$name' уже есть."; return; }
+  info "Соглашение: клиенты (Mac/телефон) — с .10; адреса .2–.9 зарезервированы под site-узлы (город/деревня)."
   ip="$(ask 'WG-адрес клиента' "$(next_ip)")"
   priv="$(awg genkey)"; pub="$(printf '%s' "$priv" | awg pubkey)"
+  info "PSK — доп. симметричный слой (постквантовая подстраховка). Тот же ключ нужен на ОБЕИХ сторонах. Тест — N, боевой пир — Y."
   if confirm "Использовать PresharedKey (доп. слой)?" "n"; then psk="$(awg genpsk)"; fi
 
   mkdir -p "$PEERS_DIR"
@@ -466,6 +468,7 @@ peer_add_site(){
   subnet="$(ask 'LAN-подсеть узла (напр. 192.168.52.0/24)' '')"; [ -n "$subnet" ] || { warn "Подсеть обязательна для site."; return; }
   echo "Приватный ключ site-узла остаётся НА УСТРОЙСТВЕ. Сюда вставь его ПУБЛИЧНЫЙ ключ."
   pub="$(ask 'Публичный ключ узла (base64)' '')"; [ -n "$pub" ] || { warn "Пусто."; return; }
+  info "PSK — доп. симметричный слой (постквантовая подстраховка). Тот же ключ нужен на ОБЕИХ сторонах. Тест — N, боевой пир — Y."
   if confirm "Использовать PresharedKey?" "n"; then psk="$(awg genpsk)"; fi
 
   mkdir -p "$PEERS_DIR"
