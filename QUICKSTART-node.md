@@ -55,6 +55,11 @@ modprobe amneziawg && awg --version && echo "driver OK"
 
 Подставь свой WG-адрес узла в `ADDRESSES` и ключ хаба в `PEER_PUBLIC_KEY`:
 
+> 📝 **Руками в блоке ниже меняешь только `PEER_PUBLIC_KEY`** — впиши туда
+> публичный ключ хаба (`awg show awg0 public-key` на хабе) вместо
+> `<публичный ключ хаба>`. И проверь `ADDRESSES` (WG-адрес этого узла). Всё
+> остальное — приватный ключ, обфускация, сети — подставляется само, не трогай.
+
 ```sh
 cd /root
 NODE_PRIV=$(awg genkey)
