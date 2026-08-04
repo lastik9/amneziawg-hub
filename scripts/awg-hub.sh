@@ -66,6 +66,16 @@ ask(){
   if [ -n "$d" ]; then read -rp "$(printf '%s%s%s [%s]: ' "$c_bold" "$p" "$c_reset" "$d")" a; printf '%s' "${a:-$d}"
   else read -rp "$(printf '%s%s%s: ' "$c_bold" "$p" "$c_reset")" a; printf '%s' "$a"; fi
 }
+# ask_name "вопрос" [дефолт] — как ask, но имя только из [A-Za-z0-9_-].
+# Режет мусор/typeahead/склейку/случайную кириллицу ДО попадания в conf и имена
+# файлов (#14). Предупреждение шлём в stderr, чтобы не попало в само имя.
+ask_name(){
+  local raw clean
+  raw="$(ask "$1" "${2:-}")"
+  clean="${raw//[!A-Za-z0-9_-]/}"
+  [ "$clean" != "$raw" ] && warn "Имя очищено от недопустимых символов → '$clean'." >&2
+  printf '%s' "$clean"
+}
 # confirm "вопрос" "y|n"  → 0 если да
 confirm(){
   local p="$1" d="${2:-y}" h="${3:-}" a hint edef
@@ -416,7 +426,7 @@ peer_add_client(){
   require_hub
   title "Добавить клиента (роуминг: Mac / телефон / ноут)"
   local name ip priv pub psk="" conf
-  name="$(ask 'Имя (латиница, без пробелов)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
+  name="$(ask_name 'Имя (латиница, без пробелов)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
   [ -f "$PEERS_DIR/$name.peer" ] && { warn "Пир '$name' уже есть."; return; }
   info "Соглашение: клиенты (Mac/телефон) — с .10; адреса .2–.9 зарезервированы под site-узлы (город/деревня)."
   ip="$(ask 'WG-адрес клиента' "$(next_ip)")"
@@ -468,7 +478,7 @@ peer_add_site(){
   require_hub
   title "Добавить site-узел (OpenWrt со своей LAN-подсетью)"
   local name ip pub subnet psk=""
-  name="$(ask 'Имя (напр. derevnya / gorod)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
+  name="$(ask_name 'Имя (напр. derevnya / gorod)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
   [ -f "$PEERS_DIR/$name.peer" ] && { warn "Пир '$name' уже есть."; return; }
   ip="$(ask 'WG-адрес узла' "$(next_ip)")"
   subnet="$(ask 'LAN-подсеть узла (напр. 192.168.52.0/24)' '')"; [ -n "$subnet" ] || { warn "Подсеть обязательна для site."; return; }
@@ -513,16 +523,28 @@ EOF
 
 peer_remove(){
   require_hub
-  peer_list
-  local name f
-  name="$(ask 'Имя пира для удаления (пусто = отмена)' '')"; [ -n "$name" ] || return
-  f="$PEERS_DIR/$name.peer"; [ -f "$f" ] || { warn "Нет такого пира."; return; }
-  confirm "Точно удалить '$name'?" "n" || return
+  title "Удалить пир"
+  local files=() f i=1 sel base line
+  for f in "$PEERS_DIR"/*.peer; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -eq 0 ] && { warn "Пиров нет."; pause; return; }
+  # Выбор по НОМЕРУ, а не по имени: снимает и уже битые пиры (#14), чьё имя в
+  # файле содержит мусорный байт и с клавиатуры не набирается.
+  for f in "${files[@]}"; do
+    line="$( . "$f"; printf '%-16s %-6s %-16s %s' "$NAME" "${TYPE:-?}" "${WG_IP:-?}" "${SUBNET:-—}" )"
+    printf '  %2d) %s\n' "$i" "$line"
+    i=$((i+1))
+  done
+  echo
+  sel="$(ask 'Номер пира для удаления (пусто = отмена)' '')"; [ -n "$sel" ] || return
+  case "$sel" in ''|*[!0-9]*) { warn "Нужен номер из списка."; return; };; esac
+  { [ "$sel" -ge 1 ] && [ "$sel" -le "${#files[@]}" ]; } || { warn "Нет пункта $sel."; return; }
+  f="${files[$((sel-1))]}"; base="$(basename "$f" .peer)"
+  confirm "Точно удалить '$base'?" "n" || return
   # снять маршрут, если был
   ( . "$f"; [ -n "${SUBNET:-}" ] && ip route del "$SUBNET" dev "$IFACE" 2>/dev/null || true )
-  rm -f "$f" "$PEERS_DIR/$name.conf"
+  rm -f "$f" "${f%.peer}.conf"
   apply
-  ok "Пир '$name' удалён."
+  ok "Пир удалён."
   pause
 }
 
@@ -530,7 +552,7 @@ peer_show_conf(){
   local f name
   title "Показать сохранённый .conf клиента"
   for f in "$PEERS_DIR"/*.conf; do echo "  - $(basename "$f" .conf)"; done
-  name="$(ask 'Имя клиента' '')"; [ -n "$name" ] || return
+  name="$(ask_name 'Имя клиента' '')"; [ -n "$name" ] || return
   [ -f "$PEERS_DIR/$name.conf" ] || { warn "Нет .conf (site-узлы .conf не хранят)."; return; }
   cat "$PEERS_DIR/$name.conf"
   echo
