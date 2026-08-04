@@ -231,7 +231,9 @@ step_collect_params(){
   echo "Режим:"
   echo "  1) Пересобрать существующий хаб (по возможности сохранить старый ключ сервера)"
   echo "  2) Новый независимый хаб (сгенерировать всё заново)"
-  mode="$(ask "Выбор" "$([ -f "$META" ] && echo 1 || echo 2)" '1 = сохранить текущий ключ хаба, выданные QR/конфиги продолжат работать. 2 = сгенерировать всё заново, ВСЕ пиры придётся перевыпустить.')"
+  echo "  0) Назад (ничего не менять)"
+  mode="$(ask "Выбор" "$([ -f "$META" ] && echo 1 || echo 2)" '1 = сохранить текущий ключ хаба, выданные QR/конфиги продолжат работать. 2 = сгенерировать всё заново, ВСЕ пиры придётся перевыпустить. 0 = вернуться в меню.')"
+  [ "$mode" = 0 ] && return 1
 
   # если метаданные уже есть — подставляем их как дефолты
   load_meta || true
@@ -380,7 +382,7 @@ EOF
 }
 
 bootstrap(){
-  step_collect_params
+  step_collect_params || return
   local sshp; sshp="$(ask 'SSH-порт (обычно 22)' '22' 'Порт, который откроем в файрволе под SSH. Оставь 22, если не менял вручную — иначе рискуешь потерять доступ к серверу.')"
   step_system
   # ключ мог появиться только сейчас — дособерём pubkey
@@ -406,6 +408,16 @@ EOF
 # ═══════════════════════════ ПИРЫ ═══════════════════════════
 require_hub(){ load_meta || die "Хаб ещё не настроен — сначала пункт 1 (bootstrap)."; SERVER_PUB="${SERVER_PUB:-$(awg pubkey < "$SRV_KEY" 2>/dev/null)}"; }
 
+# awg_show_named — вывод `awg show $IFACE`, но над каждым `peer:` подставляет имя
+# пира из реестра ($PEERS_DIR/*.peer). Неизвестный пир помечает «(нет в реестре)»
+# — заодно детектор чужих ключей в туннеле.
+awg_show_named(){
+  { for f in "$PEERS_DIR"/*.peer; do [ -e "$f" ] && ( . "$f"; printf 'MAP\t%s\t%s\n' "$PUBKEY" "$NAME" ); done
+    awg show "$IFACE"; } | awk '
+    /^MAP\t/   { split($0,a,"\t"); name[a[2]]=a[3]; next }
+    /^peer: /  { pk=$2; print "### " (name[pk] ? name[pk] : "(нет в реестре)") }
+    { print }'
+}
 peer_list(){
   title "Пиры"
   local f any=0
@@ -418,7 +430,7 @@ peer_list(){
   [ "$any" = 0 ] && echo "  (пусто)"
   echo
   if awg show "$IFACE" >/dev/null 2>&1; then
-    info "Живые хендшейки:"; awg show "$IFACE" | sed 's/^/    /'
+    info "Живые хендшейки:"; awg_show_named | sed 's/^/    /'
   fi
 }
 
@@ -549,14 +561,20 @@ peer_remove(){
 }
 
 peer_show_conf(){
-  local f name
+  local files=() f i=1 sel base
   title "Показать сохранённый .conf клиента"
-  for f in "$PEERS_DIR"/*.conf; do echo "  - $(basename "$f" .conf)"; done
-  name="$(ask_name 'Имя клиента' '')"; [ -n "$name" ] || return
-  [ -f "$PEERS_DIR/$name.conf" ] || { warn "Нет .conf (site-узлы .conf не хранят)."; return; }
-  cat "$PEERS_DIR/$name.conf"
+  for f in "$PEERS_DIR"/*.conf; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -eq 0 ] && { warn "Нет сохранённых .conf (site-узлы .conf не хранят)."; pause; return; }
+  for f in "${files[@]}"; do printf '  %2d) %s\n' "$i" "$(basename "$f" .conf)"; i=$((i+1)); done
   echo
-  confirm "QR?" "n" && qrencode -t ansiutf8 < "$PEERS_DIR/$name.conf"
+  sel="$(ask 'Номер клиента (пусто = отмена)' '')"; [ -n "$sel" ] || return
+  case "$sel" in ''|*[!0-9]*) { warn "Нужен номер из списка."; return; };; esac
+  { [ "$sel" -ge 1 ] && [ "$sel" -le "${#files[@]}" ]; } || { warn "Нет пункта $sel."; return; }
+  f="${files[$((sel-1))]}"; base="$(basename "$f" .conf)"
+  echo; info "=== $base ==="
+  cat "$f"
+  echo
+  confirm "QR?" "n" && qrencode -t ansiutf8 < "$f"
   pause
 }
 
@@ -593,7 +611,7 @@ status(){
     echo "  WG:         $WG_NET  сервер $WG_ADDR"
   } || warn "Метаданных нет (хаб не настроен)."
   echo
-  info "awg show:";            awg show "$IFACE" 2>/dev/null | sed 's/^/    /' || echo "    (интерфейс не поднят)"
+  info "awg show:";            if awg show "$IFACE" >/dev/null 2>&1; then awg_show_named | sed 's/^/    /'; else echo "    (интерфейс не поднят)"; fi
   echo
   info "Маршруты в туннель:";  ip route show dev "$IFACE" 2>/dev/null | sed 's/^/    /' || true
   echo
