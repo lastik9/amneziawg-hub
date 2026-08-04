@@ -456,8 +456,8 @@ if [ "${MAKE_ZONE:-0}" = 1 ]; then
       # чей адрес разрешаем: список из --admin, иначе ВСЕ меш-сети (#18).
       # Раньше был только $MESH_SUBNET (10.0.0.0/24) — тогда устройства из LAN
       # других узлов (192.168.x.x) не попадали под admin и не открывали LuCI/SSH
-      # чужого роутера. Берём весь ALLOWED_IPS (запятые -> пробелы для src_ip-цикла).
-      if [ -n "$ADMIN_IPS" ]; then _admin_src="$ADMIN_IPS"; else _admin_src="$(echo "$ALLOWED_IPS" | tr ',' ' ')"; fi
+      # чужого роутера. Берём весь ALLOWED_IPS; список запятых режется циклом ниже (IFS=',').
+      if [ -n "$ADMIN_IPS" ]; then _admin_src="$ADMIN_IPS"; else _admin_src="$ALLOWED_IPS"; fi
       if ! uci show firewall | grep -q "name='Allow-$ZONE_NAME-admin'"; then
         r=$(uci add firewall rule)
         uci set "firewall.$r.name=Allow-$ZONE_NAME-admin"
