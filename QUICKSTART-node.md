@@ -60,12 +60,17 @@ modprobe amneziawg && awg --version && echo "driver OK"
 > `<публичный ключ хаба>`. И проверь `ADDRESSES` (WG-адрес этого узла). Всё
 > остальное — приватный ключ, обфускация, сети — подставляется само, не трогай.
 
+> 🏷️ **Имя интерфейса** задаётся в `IFACE` (по умолчанию `awg_hub`). Можно любое
+> (`awg_hub`, `awg_nl`, …) — все команды проверки ниже используют это же имя.
+> На хабе интерфейс называется `awg0` и не переименовывается — команды «на хабе»
+> в этой инструкции остаются с `awg0`.
+
 ```sh
 cd /root
 NODE_PRIV=$(awg genkey)
 NODE_PUB=$(printf '%s' "$NODE_PRIV" | awg pubkey)
 cat > /root/awg.env <<EOF
-IFACE='awg0'
+IFACE='awg_hub'
 PRIVATE_KEY='$NODE_PRIV'
 ADDRESSES='10.0.0.4/24'
 DNS=''
@@ -161,7 +166,7 @@ awg show awg0 | grep -A4 peer
 ```sh
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY      # если на роутере ssclash
 cd /root
-wget -O setup-awg.sh "https://raw.githubusercontent.com/lastik9/awg-openwrt-setup/main/setup-awg.sh"
+wget -O setup-awg.sh "https://raw.githubusercontent.com/lastik9/amneziawg-hub/main/scripts/setup-awg.sh"
 sh setup-awg.sh --mesh --no-install
 ```
 
@@ -195,7 +200,7 @@ mesh-подсети `10.0.0.0/24`**. То есть любой участник �
 
 ```sh
 # на РОУТЕРЕ: свой pubkey
-awg show awg0 public-key
+awg show awg_hub public-key
 # на ХАБЕ: этот же pubkey должен стоять у пира
 awg show awg0 | grep -A4 peer        # ищи строку peer: <pubkey узла>
 ```
@@ -216,10 +221,21 @@ ping -c3 192.168.53.1               # хаб → LAN узла (свой LAN-ад
 
 Все 0% loss = узел в меше.
 
+**LAN ↔ LAN между узлами** (устройства одного узла видят устройства другого — фича
+`--mesh`, маршруты к чужим LAN ставятся автоматически). С устройства в LAN этого узла
+пингани LAN другого узла, напр.:
+
+```sh
+ping 192.168.1.1          # LAN другого site-узла (города)
+```
+
+0% loss = LAN↔LAN работает. И наоборот: с устройства в LAN города откроется LuCI
+этого узла (`http://<LAN-адрес>/`) — админки роутеров доступны всем устройствам меша.
+
 **Панель Clash с телефона** (если оставил дефолтный открытый доступ): открой в
 браузере `http://<LAN-адрес роутера>:9090/ui/` — должно пустить.
 
-**Ребут на устойчивость:** `reboot`, через ~50 сек — `awg show awg0 | grep handshake`
+**Ребут на устойчивость:** `reboot`, через ~50 сек — `awg show awg_hub | grep handshake`
 (свежий, received ≠ 0) и `ping -c3 10.0.0.1`. Встало само = узел закреплён.
 
 ---
@@ -229,7 +245,7 @@ ping -c3 192.168.53.1               # хаб → LAN узла (свой LAN-ад
 Повтори Шаги 1–5, подставив его WG-адрес и LAN. Так как в `ALLOWED_IPS` (Шаг 2) у
 всех узлов уже прописаны **все** сети меша — старые узлы трогать не надо, новая LAN
 уже в списке. (Если держишь урезанный `ALLOWED_IPS` — допиши новую LAN на старых
-узлах: `uci add_list network.@amneziawg_awg0[0].allowed_ips='<новая LAN>'` →
+узлах: `uci add_list network.@amneziawg_awg_hub[0].allowed_ips='<новая LAN>'` →
 `uci commit network && /etc/init.d/network reload`.)
 
 **Сменился ключ/endpoint хаба?** Обнови пир без пересоздания интерфейса:
@@ -249,7 +265,9 @@ sh setup-awg.sh --mesh --no-install --reconnect
 | `Port Unreachable` с хаба | masq на зоне awg | `--mesh` уже снял; вручную `uci set firewall.awg.masq=0` |
 | Узел↔хаб есть, узел↔узел нет | хаб не форвардит awg↔awg | хаб ставит правило сам; проверь `iptables -L ufw-user-forward -n -v \| grep awg0` (`-v` обязателен) |
 | С хаба пинг узла есть, а LAN нет | на хабе нет kernel-маршрута на LAN узла | пересобери хаб (меню) — `PostUp` пропишет маршрут и переживёт ребут |
-| Узел отвалился после пересборки хаба | `syncconf` сбросил сессию, узел за NAT | на узле `ifdown awg0; ifup awg0` (пнуть хендшейк) |
+| Узел отвалился после пересборки хаба | `syncconf` сбросил сессию, узел за NAT | на узле `ifdown awg_hub; ifup awg_hub` (пнуть хендшейк) |
 | LuCI/SSH/9090 из меша не открывается | запускал с `--no-admin` | подними без `--no-admin`; проверь `nft list chain inet fw4 input_awg \| grep dport` — жди `22, 80, 443, 9090` |
+| LAN одного узла не видит LAN другого | нет маршрута к чужой LAN через туннель | `--mesh` ставит маршруты сам (из `ALLOWED_IPS`); проверь `ip route get <чужая-LAN>` — жди `dev awg_hub`, не WAN |
+| Устройство из LAN не открывает LuCI чужого роутера | admin-доступ был только для WG-подсети | `--mesh` открывает админки всем меш-сетям из `ALLOWED_IPS`; проверь `nft list chain inet fw4 input_awg \| grep admin` — в `saddr` должны быть все LAN |
 | Клиент (телефон) не видит LAN узла | в конфиге клиента `AllowedIPs` без LAN узла | добавь все сети меша в конфиг клиента и переимпортируй QR |
 | Своя LAN видна, чужая нет | `ALLOWED_IPS` без чужих LAN | держи все сети (Шаг 2) |
