@@ -621,6 +621,68 @@ status(){
   pause
 }
 
+# ═══════════════════════════ АУДИТ МЕША (health-check) ═══════════════════════════
+# Read-only обзор всех пиров: handshake, трафик, детект проблем. НЕ трогает awg0.conf
+# (безопасно относительно #8). Источник — `awg show $IFACE dump` (TSV) + реестр .peer.
+# Детектит: чужой ключ (нет в реестре), сигнатуру неверного ключа v9 (0 B received),
+# протухший handshake (>3мин), рассинхрон conf (пир в реестре, но не в туннеле).
+health_check(){
+  require_hub
+  title "Аудит меша (health-check)"
+  if ! awg show "$IFACE" dump >/dev/null 2>&1; then
+    warn "Интерфейс $IFACE не поднят — нечего проверять."; pause; return
+  fi
+  {
+    for f in "$PEERS_DIR"/*.peer; do [ -e "$f" ] && \
+      ( . "$f"; printf 'MAP\t%s\t%s\t%s\t%s\t%s\n' "$PUBKEY" "$NAME" "${TYPE:-?}" "$WG_IP" "${SUBNET:-—}" ); done
+    printf 'NOW\t%s\n' "$(date +%s)"
+    awg show "$IFACE" dump | awk 'NR>1{print "PEER\t" $0}'
+  } | awk -F'\t' \
+      -v g="$c_grn" -v y="$c_ylw" -v r="$c_red" -v z="$c_reset" '
+    function hb(b,   u,i){ split("B KiB MiB GiB TiB",u," "); i=1;
+      while(b>=1024 && i<5){b/=1024;i++} return sprintf((i==1?"%d %s":"%.1f %s"),b,u[i]) }
+    function hd(s,   m,h,dd){ if(s<0)s=0; if(s<60)return s "s"; m=int(s/60);
+      if(m<60)return m "m"; h=int(m/60); if(h<24)return h "h"(m%60)"m";
+      dd=int(h/24); return dd "d"(h%24)"h" }
+    $1=="MAP" { pk=$2; nm[pk]=$3; tp[pk]=$4; ip[pk]=$5; sn[pk]=$6;
+                reg[pk]=1; rord[++rn]=pk; next }
+    $1=="NOW" { now=$2; next }
+    $1=="PEER"{ pk=$2; live[pk]=1; ord[++n]=pk;
+                e_hs[pk]=$6; e_rx[pk]=$7; e_tx[pk]=$8; next }
+    END {
+      printf "%-16s %-6s %-13s %-13s %9s %9s  %s\n",
+        "ИМЯ","ТИП","WG-IP","HANDSHAKE","RX","TX","СТАТУС"
+      print "  ──────────────────────────────────────────────────────────────────────────"
+      probs=0
+      for(i=1;i<=n;i++){ pk=ord[i]
+        name = (pk in nm)? nm[pk] : "(нет в реестре)"
+        type = (pk in tp)? tp[pk] : "?"
+        wgip = (pk in ip)? ip[pk] : "—"
+        hs=e_hs[pk]+0; rx=e_rx[pk]+0; tx=e_tx[pk]+0
+        hsstr = (hs==0)? "никогда" : hd(now-hs)" назад"
+        col=g; st="OK"
+        if(!(pk in nm))            { col=r; st="ЧУЖОЙ КЛЮЧ — нет в реестре"; probs++ }
+        else if(hs==0 && rx==0)    { col=r; st="нет связи (0 RX — сверь pubkey, v9)"; probs++ }
+        else if(hs==0)             { col=y; st="handshake: никогда"; probs++ }
+        else if((now-hs)>180)      { col=y; st="устарел (>3мин)"; probs++ }
+        else if(rx==0)             { col=y; st="0 RX (?)"; probs++ }
+        printf "%-16s %-6s %-13s %-13s %9s %9s  %s%s%s\n",
+          name,type,wgip,hsstr,hb(rx),hb(tx),col,st,z
+      }
+      for(i=1;i<=rn;i++){ pk=rord[i]
+        if(pk in live) continue
+        printf "%-16s %-6s %-13s %-13s %9s %9s  %s%s%s\n",
+          nm[pk],tp[pk],ip[pk],"—","—","—",r,"в реестре, нет в туннеле",z
+        probs++
+      }
+      print "  ──────────────────────────────────────────────────────────────────────────"
+      if(probs==0) printf "  %sВсё чисто: проблем не найдено.%s\n", g, z
+      else         printf "  %sПроблем: %d — см. столбец СТАТУС.%s\n", y, probs, z
+    }'
+  echo
+  pause
+}
+
 # ═══════════════════════════ ГЛАВНОЕ МЕНЮ ═══════════════════════════
 main_menu(){
   while true; do
@@ -637,12 +699,14 @@ main_menu(){
   1) Установить / пересобрать хаб (bootstrap)
   2) Управление пирами
   3) Статус
+  4) Аудит меша (health-check)
   0) Выход
 EOF
     case "$(ask 'Выбор' '1')" in
       1) bootstrap ;;
       2) peers_menu ;;
       3) status ;;
+      4) health_check ;;
       0) exit 0 ;;
       *) warn "Не понял."; sleep 1 ;;
     esac
