@@ -578,6 +578,46 @@ peer_show_conf(){
   pause
 }
 
+# #3 — перевыпуск клиента: обновить AllowedIPs в ЕГО .conf под текущий набор
+# site-подсетей. Хаб-сторона пира остаётся WG_IP/32 → awg0.conf НЕ трогаем (обход #8).
+# Лечит #16 (новые site-узлы не видны ранее выданным клиентам) задним числом.
+peer_reissue_client(){
+  require_hub
+  local files=() f i=1 sel base cur new
+  title "Перевыпуск .conf клиента — обновить AllowedIPs под текущие site-подсети"
+  for f in "$PEERS_DIR"/*.conf; do [ -e "$f" ] && files+=("$f"); done
+  [ "${#files[@]}" -eq 0 ] && { warn "Нет сохранённых .conf клиентов (site-узлы .conf не хранят)."; pause; return; }
+  for f in "${files[@]}"; do printf '  %2d) %s\n' "$i" "$(basename "$f" .conf)"; i=$((i+1)); done
+  echo
+  sel="$(ask 'Номер клиента (пусто = отмена)' '')"; [ -n "$sel" ] || return
+  case "$sel" in ''|*[!0-9]*) { warn "Нужен номер из списка."; return; };; esac
+  { [ "$sel" -ge 1 ] && [ "$sel" -le "${#files[@]}" ]; } || { warn "Нет пункта $sel."; return; }
+  f="${files[$((sel-1))]}"; base="$(basename "$f" .conf)"
+
+  cur="$(sed -n 's/^AllowedIPs = //p' "$f" | head -n1)"
+  new="$(client_allowed_ips)"
+  echo
+  info "Текущий AllowedIPs: ${cur:-—}"
+  info "Новый  AllowedIPs:  $new"
+  if [ "$cur" = "$new" ]; then
+    ok "Уже актуально — набор site-подсетей не изменился. Правка не требуется."
+    pause; return
+  fi
+  confirm "Обновить AllowedIPs в $base.conf? (awg0.conf НЕ трогаем)" "y" \
+    "Меняется только клиентский .conf. Хаб-пир клиента остаётся /32 — риска #8 нет." || return
+  sed -i "s|^AllowedIPs = .*|AllowedIPs = $new|" "$f"
+  chmod 600 "$f"
+  ok "AllowedIPs обновлён. Хаб-сторона пира '$base' (/32) не менялась — awg0.conf не переписан."
+  title "Обновлённый .conf клиента $base"
+  cat "$f"
+  echo
+  if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y"; then
+    qrencode -t ansiutf8 < "$f" || warn "qrencode недоступен."
+  fi
+  warn "Перенеси обновлённый .conf/QR на устройство НАПРЯМУЮ (scp), не через Clash."
+  pause
+}
+
 peers_menu(){
   require_hub
   while true; do
@@ -588,6 +628,7 @@ peers_menu(){
   3) + Site (OpenWrt со своей подсетью) — вводим их pubkey
   4) Показать .conf клиента заново
   5) Удалить пир
+  6) Перевыпуск .conf клиента — обновить AllowedIPs под текущие site-подсети (#16)
   0) Назад
 EOF
     case "$(ask 'Выбор' '1')" in
@@ -596,6 +637,7 @@ EOF
       3) peer_add_site ;;
       4) peer_show_conf ;;
       5) peer_remove ;;
+      6) peer_reissue_client ;;
       0) return ;;
       *) warn "Не понял." ;;
     esac
