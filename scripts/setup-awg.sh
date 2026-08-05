@@ -15,6 +15,8 @@
 #                                         # сузить доступ к LuCI/SSH узла до этих адресов
 #   sh setup-awg.sh --mesh --no-admin     # не открывать управление узла из меша (только из LAN узла)
 #   sh setup-awg.sh --mesh --reconnect    # обновить пир (ключ/endpoint/allowed_ips хаба) без пересоздания
+#   sh setup-awg.sh --check               # САМОПРОВЕРКА узла (read-only): iface/пир-хаб/маршруты/
+#                                         # nft/src_ip(#18)/masq/ping — PASS/FAIL. Ничего не меняет.
 #
 # Интерактивный мастер спросит имя интерфейса (напр. awg_nl), откроет редактор для
 # вставки .conf и создаст всё сам. Несколько серверов = несколько интерфейсов с
@@ -39,6 +41,7 @@ MESH_MODE=0         # 1 = меш (any-to-any), см. --mesh
 ADMIN_IPS=''        # кому открыть LuCI/SSH узла из меша (--admin); пусто = вся mesh-подсеть (см. NO_ADMIN)
 NO_ADMIN=0          # 1 = НЕ открывать управление узла из меша (--no-admin)
 RECONNECT=0         # 1 = обновить существующий интерфейс (ключ хаба/endpoint/allowed_ips), см. --reconnect
+CHECK_MODE=0        # 1 = только самопроверка узла (read-only), см. --check
 MESH_SUBNET='10.0.0.0/24'  # источник по умолчанию для доступа к управлению узла в mesh-режиме
 ADMIN_PORTS='22 80 443 9090'  # порты узла, открываемые из меша: SSH(22)/LuCI(80,443)+Clash-панель(9090)
 SHARED_ZONE='awg'   # общая зона для всех awg-интерфейсов
@@ -62,11 +65,136 @@ while [ $# -gt 0 ]; do
     --admin) ADMIN_IPS="${2:-}"; MESH_MODE=1; shift 2 || die "--admin требует список адресов через запятую" ;;
     --no-admin) NO_ADMIN=1; shift ;;
     --reconnect) RECONNECT=1; shift ;;
+    --check) CHECK_MODE=1; shift ;;
     --env) ENV_FILE="${2:-}"; shift 2 || die "--env требует путь" ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "Неизвестный аргумент: $1" ;;
   esac
 done
+
+# ---------- САМОПРОВЕРКА узла (--check): read-only диагностика ----------
+# Ничего НЕ меняет: только awg show / ip route get / nft list / uci show / ping.
+# Сворачивает проверки шага 6 (QUICKSTART-node) в PASS/FAIL. Требует env узла
+# (IFACE, ALLOWED_IPS, PEER_PUBLIC_KEY, ENDPOINT_HOST, [ZONE_NAME]).
+do_check() {
+  _c_ok=0; _c_fail=0; _c_warn=0
+  _c_p() { printf '  \033[1;32m[PASS]\033[0m %s\n' "$*"; _c_ok=$((_c_ok+1)); }
+  _c_f() { printf '  \033[1;31m[FAIL]\033[0m %s\n' "$*"; _c_fail=$((_c_fail+1)); }
+  _c_w() { printf '  \033[1;33m[WARN]\033[0m %s\n' "$*"; _c_warn=$((_c_warn+1)); }
+
+  _c_zone="${ZONE_NAME:-$SHARED_ZONE}"
+  printf '\n\033[1mСамопроверка узла — iface=%s, зона=%s\033[0m\n' "$IFACE" "$_c_zone"
+  printf -- '----------------------------------------------------------------\n'
+
+  # --- 1. интерфейс + пир-хаб (ключ / endpoint / handshake / RX>0 = детект v9) ---
+  _c_dump="$(awg show "$IFACE" dump 2>/dev/null)"
+  if [ -z "$_c_dump" ]; then
+    _c_f "интерфейс $IFACE не поднят (awg show пуст)"
+  else
+    _c_p "интерфейс $IFACE поднят"
+    _c_hub="$(echo "$_c_dump" | awk -v k="$PEER_PUBLIC_KEY" '$1==k{print;exit}')"
+    if [ -z "$_c_hub" ]; then
+      _c_f "пир-хаб с ключом ${PEER_PUBLIC_KEY%%=*}… НЕ найден в $IFACE"
+    else
+      _c_ep="$(echo "$_c_hub" | awk '{print $3}')"
+      _c_hs="$(echo "$_c_hub" | awk '{print $5}')"
+      _c_rx="$(echo "$_c_hub" | awk '{print $6}')"; _c_rx="${_c_rx:-0}"
+      case "$_c_ep" in
+        "${ENDPOINT_HOST:-x}":*) _c_p "endpoint хаба: $_c_ep" ;;
+        *) _c_w "endpoint хаба = $_c_ep (ожидали ${ENDPOINT_HOST:-?}:*)" ;;
+      esac
+      if [ "${_c_hs:-0}" != 0 ]; then _c_p "handshake с хабом есть"; else _c_f "handshake с хабом НЕТ"; fi
+      if [ "$_c_rx" -gt 0 ] 2>/dev/null; then
+        _c_p "RX от хаба > 0 ($_c_rx B)"
+      else
+        _c_f "RX от хаба = 0 — сигнатура неверного pubkey (урок v9): сверь ключ хаба крест-накрест"
+      fi
+    fi
+  fi
+
+  # --- 2. маршруты: своя LAN -> br-lan; чужие LAN -> dev $IFACE (#17) ---
+  _c_ownlan="$(ip route show dev br-lan scope link 2>/dev/null | awk '/proto kernel/{print $1; exit}')"
+  if [ -n "$_c_ownlan" ]; then
+    _c_ownprobe="$(echo "$_c_ownlan" | cut -d/ -f1 | awk -F. '{print $1"."$2"."$3".254"}')"
+    _c_dev="$(ip route get "$_c_ownprobe" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')"
+    if [ "$_c_dev" = "br-lan" ]; then _c_p "своя LAN $_c_ownlan -> dev br-lan"; else _c_f "своя LAN $_c_ownlan -> dev ${_c_dev:-?} (ожидали br-lan)"; fi
+  else
+    _c_w "не удалось определить свою LAN (br-lan)"
+  fi
+
+  _c_old=$IFS; IFS=','
+  for _c_net in $ALLOWED_IPS; do
+    _c_net="$(echo "$_c_net" | tr -d ' ')"; [ -n "$_c_net" ] || continue
+    case "$_c_net" in 10.0.0.0/24) continue ;; "$_c_ownlan") continue ;; esac
+    _c_fgw="$(echo "$_c_net" | cut -d/ -f1 | awk -F. '{print $1"."$2"."$3".1"}')"
+    _c_fdev="$(ip route get "$_c_fgw" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}')"
+    if [ "$_c_fdev" = "$IFACE" ]; then _c_p "чужая LAN $_c_net -> dev $IFACE"; else _c_f "чужая LAN $_c_net -> dev ${_c_fdev:-?} (ожидали $IFACE) — #17?"; fi
+  done
+  IFS=$_c_old
+
+  # --- 3. nft: цепочка input_$zone + admin-порты ---
+  _c_chain="$(nft list chain inet fw4 "input_$_c_zone" 2>/dev/null)"
+  if [ -z "$_c_chain" ]; then
+    _c_f "nft-цепочка input_$_c_zone не поднята — зона не сработала (#18?)"
+  else
+    _c_p "nft-цепочка input_$_c_zone есть"
+    _c_miss=''
+    for _c_port in $ADMIN_PORTS; do
+      echo "$_c_chain" | grep -Eq "(^|[^0-9])$_c_port([^0-9]|\$)" || _c_miss="$_c_miss $_c_port"
+    done
+    if [ -z "$_c_miss" ]; then _c_p "admin-порты открыты: $ADMIN_PORTS"; else _c_f "нет admin-портов в input_$_c_zone:$_c_miss"; fi
+  fi
+
+  # --- 4. src_ip admin-правила = СПИСОК (проверка фикса #18) ---
+  _c_sec="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\([^.]*\)\.name='Allow-$_c_zone-admin'/\1/p" | head -1)"
+  if [ -z "$_c_sec" ]; then
+    _c_w "admin-правило Allow-$_c_zone-admin не найдено (--no-admin?)"
+  else
+    _c_src="$(uci -q get "firewall.$_c_sec.src_ip" 2>/dev/null)"
+    _c_nwords="$(echo "$_c_src" | wc -w | tr -d ' ')"
+    _c_nslash="$(echo "$_c_src" | tr -cd '/' | wc -c | tr -d ' ')"
+    if [ "$_c_nwords" -ge 2 ]; then
+      _c_p "src_ip admin-правила — список из $_c_nwords сетей (#18 ок)"
+    elif [ "$_c_nslash" -ge 2 ]; then
+      _c_f "src_ip СЛИПСЯ в один CIDR (#18!) — fw4 не поднимет зону. Hotfix: см. handoff."
+    else
+      _c_w "src_ip = '$_c_src' (одна сеть — норма для --admin с одним адресом)"
+    fi
+  fi
+
+  # --- 5. masq зоны = 0 (меш) ---
+  _c_zsec="$(uci show firewall 2>/dev/null | sed -n "s/^firewall\.\([^.]*\)\.name='$_c_zone'\$/\1/p" | head -1)"
+  [ -n "$_c_zsec" ] || _c_zsec="$_c_zone"
+  _c_masq="$(uci -q get "firewall.$_c_zsec.masq" 2>/dev/null)"
+  if [ "$_c_masq" = 0 ]; then _c_p "masq зоны $_c_zone = 0 (меш)"
+  elif [ "$_c_masq" = 1 ]; then _c_f "masq зоны $_c_zone = 1 — в меше должно быть 0"
+  else _c_w "masq зоны $_c_zone не определён ('$_c_masq')"; fi
+
+  # --- 6. ping: хаб (обязателен) + шлюзы чужих LAN (зависят от удалённого узла) ---
+  if ping -c1 -W2 10.0.0.1 >/dev/null 2>&1; then _c_p "ping хаба 10.0.0.1 — ок"; else _c_f "ping хаба 10.0.0.1 НЕ проходит"; fi
+  _c_old=$IFS; IFS=','
+  for _c_net in $ALLOWED_IPS; do
+    _c_net="$(echo "$_c_net" | tr -d ' ')"; [ -n "$_c_net" ] || continue
+    case "$_c_net" in 10.0.0.0/24) continue ;; "$_c_ownlan") continue ;; esac
+    _c_fgw="$(echo "$_c_net" | cut -d/ -f1 | awk -F. '{print $1"."$2"."$3".1"}')"
+    if ping -c1 -W2 "$_c_fgw" >/dev/null 2>&1; then _c_p "ping шлюза чужой LAN $_c_fgw — ок"; else _c_w "ping $_c_fgw не прошёл (чужой узел офлайн? маршрут см. выше)"; fi
+  done
+  IFS=$_c_old
+
+  printf -- '----------------------------------------------------------------\n'
+  printf '  Итог: \033[1;32m%d PASS\033[0m / \033[1;31m%d FAIL\033[0m / \033[1;33m%d WARN\033[0m\n' "$_c_ok" "$_c_fail" "$_c_warn"
+  [ "$_c_fail" = 0 ]
+}
+
+if [ "$CHECK_MODE" = 1 ]; then
+  [ -r "$ENV_FILE" ] || die "Нет env-файла: $ENV_FILE (для --check нужен env узла, обычно /root/awg.env)"
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  : "${IFACE:?IFACE не задан в env}"
+  : "${ALLOWED_IPS:?ALLOWED_IPS не задан в env}"
+  : "${PEER_PUBLIC_KEY:?PEER_PUBLIC_KEY не задан в env}"
+  do_check; exit $?
+fi
 
 # ---------- парсер .conf -> env (общий для --from-conf и мастера) ----------
 # get KEY FILE — значение по ключу из .conf
