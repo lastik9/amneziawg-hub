@@ -56,6 +56,21 @@ die(){  err "$*"; exit 1; }
 hr(){   printf '%s────────────────────────────────────────────────────────%s\n' "$c_dim" "$c_reset"; }
 title(){ printf '\n%s%s%s\n' "$c_bold$c_mag" "$*" "$c_reset"; hr; }
 
+# vwidth — видимая ширина UTF-8-строки, локале-независимо: всего байт минус
+# continuation-байты (0x80..0xBF). Нужна т.к. bash printf %-Ns считает поле в БАЙТАХ,
+# из-за чего кириллические заголовки «плывут».
+vwidth(){ local s="$1" b c
+  b=$(LC_ALL=C; printf '%s' "$s" | wc -c)
+  c=$(printf '%s' "$s" | LC_ALL=C tr -dc '\200-\277' | wc -c)
+  echo $(( b - c )); }
+# pad — печатает строку и добивает пробелами до видимой ширины w (без перевода строки)
+pad(){ local s="$1" w="$2" vis pads
+  vis=$(vwidth "$s"); pads=$(( w - vis )); [ "$pads" -lt 0 ] && pads=0
+  printf '%s%*s' "$s" "$pads" ''; }
+# iface_of — имя iface site-узла по схеме hub<третий-октет-LAN> из 192.168.N.0/24.
+# ВНИМАНИЕ: на железе реальный iface может иметь префикс awg_ (awg_hub<N>).
+iface_of(){ case "$1" in 192.168.*.*/*|192.168.*.*) echo "hub$(printf '%s' "$1" | cut -d. -f3)";; *) echo "";; esac; }
+
 # ask "вопрос" "дефолт"  → печатает ответ в stdout (промпт идёт в stderr, чтобы не попасть в подстановку)
 ask(){
   local p="$1" d="${2:-}" h="${3:-}" a
@@ -412,7 +427,10 @@ require_hub(){ load_meta || die "Хаб ещё не настроен — сна�
 # пира из реестра ($PEERS_DIR/*.peer). Неизвестный пир помечает «(нет в реестре)»
 # — заодно детектор чужих ключей в туннеле.
 awg_show_named(){
-  { for f in "$PEERS_DIR"/*.peer; do [ -e "$f" ] && ( . "$f"; printf 'MAP\t%s\t%s\n' "$PUBKEY" "$NAME" ); done
+  { for f in "$PEERS_DIR"/*.peer; do [ -e "$f" ] && ( . "$f"
+        disp="$NAME"
+        if [ "${TYPE:-}" = site ]; then ifc="$(iface_of "${SUBNET:-}")"; [ -n "$ifc" ] && disp="$NAME (iface $ifc)"; fi
+        printf 'MAP\t%s\t%s\n' "$PUBKEY" "$disp" ); done
     awg show "$IFACE"; } | awk '
     /^MAP\t/   { split($0,a,"\t"); name[a[2]]=a[3]; next }
     /^peer: /  { pk=$2; print "### " (name[pk] ? name[pk] : "(нет в реестре)") }
@@ -421,13 +439,26 @@ awg_show_named(){
 peer_list(){
   title "Пиры"
   local f any=0
-  printf '%-16s %-6s %-16s %-20s %s\n' "ИМЯ" "ТИП" "WG-IP" "LAN-ПОДСЕТЬ" "PUBKEY"
+  # шапка (PUBKEY уехал во вторую строку/аудит #1); колонки ровные через pad (fix кириллицы)
+  { pad ИМЯ 16; printf ' '; pad ТИП 7; printf ' '; pad WG-IP 16; printf ' '; pad LAN-ПОДСЕТЬ 16; echo; }
   hr
   for f in "$PEERS_DIR"/*.peer; do
+    [ -e "$f" ] || continue
     any=1
-    ( . "$f"; printf '%-16s %-6s %-16s %-20s %s\n' "$NAME" "${TYPE:-?}" "$WG_IP" "${SUBNET:-—}" "${PUBKEY:0:16}…" )
+    ( . "$f"
+      { pad "$NAME" 16; printf ' '; pad "${TYPE:-?}" 7; printf ' '; pad "$WG_IP" 16; printf ' '; pad "${SUBNET:-—}" 16; echo; }
+      # вторая строка: iface (site) + описание, только если есть что показать
+      ifc=""; [ "${TYPE:-}" = site ] && ifc="$(iface_of "${SUBNET:-}")"
+      extra=""
+      [ -n "$ifc" ] && extra="iface $ifc"
+      if [ -n "${DESC:-}" ]; then
+        if [ -n "$extra" ]; then extra="$extra — \"$DESC\""; else extra="\"$DESC\""; fi
+      fi
+      [ -n "$extra" ] && printf '      └ %s\n' "$extra"
+    )
   done
   [ "$any" = 0 ] && echo "  (пусто)"
+  echo "  ${c_dim}iface site-узла — по схеме hub<N>; на железе возможен префикс awg_hub<N>${c_reset}"
   echo
   if awg show "$IFACE" >/dev/null 2>&1; then
     info "Живые хендшейки:"; awg_show_named | sed 's/^/    /'
@@ -437,7 +468,7 @@ peer_list(){
 peer_add_client(){
   require_hub
   title "Добавить клиента (роуминг: Mac / телефон / ноут)"
-  local name ip priv pub psk="" conf
+  local name ip priv pub psk="" conf desc
   name="$(ask_name 'Имя (латиница, без пробелов)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
   [ -f "$PEERS_DIR/$name.peer" ] && { warn "Пир '$name' уже есть."; return; }
   info "Соглашение: клиенты (Mac/телефон) — с .10; адреса .2–.9 зарезервированы под site-узлы (город/деревня)."
@@ -445,6 +476,8 @@ peer_add_client(){
   priv="$(awg genkey)"; pub="$(printf '%s' "$priv" | awg pubkey)"
   info "PSK — доп. симметричный слой (постквантовая подстраховка). Тот же ключ нужен на ОБЕИХ сторонах. Тест — N, боевой пир — Y."
   if confirm "Использовать PresharedKey (доп. слой)?" "n"; then psk="$(awg genpsk)"; fi
+  desc="$(ask 'Описание (опц., напр. телефон жены)' '')"
+  desc=${desc//\"/}; desc=${desc//\\/}; desc=${desc//\$/}; desc=${desc//\`/}   # безопасно для source .peer
 
   mkdir -p "$PEERS_DIR"
   cat > "$PEERS_DIR/$name.peer" <<EOF
@@ -453,6 +486,7 @@ TYPE="client"
 PUBKEY="$pub"
 WG_IP="$ip"
 PSK="$psk"
+DESC="$desc"
 EOF
   chmod 600 "$PEERS_DIR/$name.peer"
   apply
@@ -489,7 +523,7 @@ EOF
 peer_add_site(){
   require_hub
   title "Добавить site-узел (OpenWrt со своей LAN-подсетью)"
-  local name ip pub subnet psk=""
+  local name ip pub subnet psk="" desc
   name="$(ask_name 'Имя (напр. derevnya / gorod)' '')"; [ -n "$name" ] || { warn "Пусто."; return; }
   [ -f "$PEERS_DIR/$name.peer" ] && { warn "Пир '$name' уже есть."; return; }
   ip="$(ask 'WG-адрес узла' "$(next_ip)")"
@@ -498,6 +532,8 @@ peer_add_site(){
   pub="$(ask 'Публичный ключ узла (base64)' '')"; [ -n "$pub" ] || { warn "Пусто."; return; }
   info "PSK — доп. симметричный слой (постквантовая подстраховка). Тот же ключ нужен на ОБЕИХ сторонах. Тест — N, боевой пир — Y."
   if confirm "Использовать PresharedKey?" "n"; then psk="$(awg genpsk)"; fi
+  desc="$(ask 'Описание (опц., напр. форкоп-город)' '')"
+  desc=${desc//\"/}; desc=${desc//\\/}; desc=${desc//\$/}; desc=${desc//\`/}   # безопасно для source .peer
 
   mkdir -p "$PEERS_DIR"
   cat > "$PEERS_DIR/$name.peer" <<EOF
@@ -507,6 +543,7 @@ PUBKEY="$pub"
 WG_IP="$ip"
 SUBNET="$subnet"
 PSK="$psk"
+DESC="$desc"
 EOF
   chmod 600 "$PEERS_DIR/$name.peer"
   apply
