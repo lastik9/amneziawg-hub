@@ -14,6 +14,9 @@
 #   sh setup-awg.sh --mesh --admin 10.0.0.10,10.0.0.11
 #                                         # сузить доступ к LuCI/SSH узла до этих адресов
 #   sh setup-awg.sh --mesh --no-admin     # не открывать управление узла из меша (только из LAN узла)
+#   sh setup-awg.sh --mesh --admin-ports "22 80 443"
+#                                         # какие порты узла открывать из меша (дефолт: 22 80 443 9090;
+#                                         # 9090 = Clash-панель, нужен только ssclash-узлам). Также env ADMIN_PORTS=
 #   sh setup-awg.sh --mesh --reconnect    # обновить пир (ключ/endpoint/allowed_ips хаба) без пересоздания
 #   sh setup-awg.sh --check               # САМОПРОВЕРКА узла (read-only): iface/пир-хаб/маршруты/
 #                                         # nft/src_ip(#18)/masq/ping — PASS/FAIL. Ничего не меняет.
@@ -43,7 +46,7 @@ NO_ADMIN=0          # 1 = НЕ открывать управление узла 
 RECONNECT=0         # 1 = обновить существующий интерфейс (ключ хаба/endpoint/allowed_ips), см. --reconnect
 CHECK_MODE=0        # 1 = только самопроверка узла (read-only), см. --check
 MESH_SUBNET='10.0.0.0/24'  # источник по умолчанию для доступа к управлению узла в mesh-режиме
-ADMIN_PORTS='22 80 443 9090'  # порты узла, открываемые из меша: SSH(22)/LuCI(80,443)+Clash-панель(9090)
+ADMIN_PORTS="${ADMIN_PORTS:-22 80 443 9090}"  # порты узла из меша (env ADMIN_PORTS= / флаг --admin-ports). Дефолт: SSH(22)/LuCI(80,443)+Clash(9090); 9090 нужен только ssclash-узлам
 SHARED_ZONE='awg'   # общая зона для всех awg-интерфейсов
 INSTALLER_URL='https://raw.githubusercontent.com/Slava-Shchipunov/awg-openwrt/refs/heads/master/amneziawg-install.sh'
 
@@ -63,6 +66,7 @@ while [ $# -gt 0 ]; do
     --reboot) AUTO_REBOOT=1; shift ;;
     --mesh) MESH_MODE=1; shift ;;
     --admin) ADMIN_IPS="${2:-}"; MESH_MODE=1; shift 2 || die "--admin требует список адресов через запятую" ;;
+    --admin-ports) ADMIN_PORTS="${2:-}"; shift 2 || die "--admin-ports требует список портов через пробел (в кавычках)" ;;
     --no-admin) NO_ADMIN=1; shift ;;
     --reconnect) RECONNECT=1; shift ;;
     --check) CHECK_MODE=1; shift ;;
@@ -71,6 +75,12 @@ while [ $# -gt 0 ]; do
     *) die "Неизвестный аргумент: $1" ;;
   esac
 done
+
+# ---------- #15: валидация ADMIN_PORTS (непусто, только цифры и пробелы) ----------
+case "$ADMIN_PORTS" in
+  '')          die "ADMIN_PORTS пуст. Чтобы не открывать управление узла из меша — используй --no-admin." ;;
+  *[!0-9\ ]*)  die "ADMIN_PORTS: только номера портов через пробел, а не: '$ADMIN_PORTS'" ;;
+esac
 
 # ---------- САМОПРОВЕРКА узла (--check): read-only диагностика ----------
 # Ничего НЕ меняет: только awg show / ip route get / nft list / uci show / ping.
