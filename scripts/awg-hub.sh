@@ -762,6 +762,37 @@ health_check(){
   pause
 }
 
+# ═══════════════════════════ БЭКАП КОНФИГУРАЦИИ (#4) ═══════════════════════════
+# Read-only архив всего $META_DIR (реестр пиров, server.key, hub.env) в /root.
+# НЕ трогает awg0.conf и сам $META_DIR — только читает (безопасно относительно #8).
+# Внутри архива приватные ключи → chmod 600. Восстановление — вручную (см. хинт).
+backup_meta(){
+  require_hub
+  title "Бэкап конфигурации хаба"
+  [ -d "$META_DIR" ] || { warn "Нет каталога $META_DIR — сначала bootstrap (пункт 1)."; pause; return; }
+  local ts dest cnt sz b
+  ts="$(date +%Y%m%d-%H%M%S)"
+  dest="/root/awg-hub-backup-$ts.tar.gz"
+  info "Архивирую $META_DIR → $dest"
+  if ! tar czf "$dest" -C / etc/awg-hub 2>/dev/null; then
+    warn "tar завершился с ошибкой — архив не создан."; rm -f "$dest"; pause; return
+  fi
+  chmod 600 "$dest"
+  cnt="$(tar tzf "$dest" 2>/dev/null | grep -c -v '/$')"
+  sz="$(du -h "$dest" 2>/dev/null | cut -f1)"
+  ok "Готово: $dest  ($sz, файлов: $cnt)"
+  warn "Внутри приватные ключи (server.key + клиентские). Права 600 — храни бережно."
+  info "Восстановление: tar xzf <архив> -C /  (вернёт реестр+ключи в $META_DIR; живой awg0.conf синхронизировать отдельно)."
+  if ls /root/awg-hub-backup-*.tar.gz >/dev/null 2>&1; then
+    printf '\n%sСуществующие бэкапы:%s\n' "$c_dim" "$c_reset"
+    for b in $(ls -1t /root/awg-hub-backup-*.tar.gz 2>/dev/null); do
+      printf '  %s  %s\n' "$(du -h "$b" 2>/dev/null | cut -f1)" "$b"
+    done
+  fi
+  echo
+  pause
+}
+
 # ═══════════════════════════ ГЛАВНОЕ МЕНЮ ═══════════════════════════
 main_menu(){
   while true; do
@@ -779,6 +810,7 @@ main_menu(){
   2) Управление пирами
   3) Статус
   4) Аудит меша (health-check)
+  5) Бэкап конфигурации
   0) Выход
 EOF
     case "$(ask 'Выбор' '1')" in
@@ -786,6 +818,7 @@ EOF
       2) peers_menu ;;
       3) status ;;
       4) health_check ;;
+      5) backup_meta ;;
       0) exit 0 ;;
       *) warn "Не понял."; sleep 1 ;;
     esac
