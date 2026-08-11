@@ -513,7 +513,7 @@ EOF
   title "Конфиг клиента $name"
   cat "$conf"
   echo
-  if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y"; then
+  if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y" "Y — QR для сканирования в приложении. N — только текстовый .conf выше."; then
     qrencode -t ansiutf8 < "$conf" || warn "qrencode недоступен."
   fi
   warn "Переноси .conf на устройство НАПРЯМУЮ (scp), не через Clash."
@@ -588,7 +588,7 @@ peer_remove(){
   case "$sel" in ''|*[!0-9]*) { warn "Нужен номер из списка."; return; };; esac
   { [ "$sel" -ge 1 ] && [ "$sel" -le "${#files[@]}" ]; } || { warn "Нет пункта $sel."; return; }
   f="${files[$((sel-1))]}"; base="$(basename "$f" .peer)"
-  confirm "Точно удалить '$base'?" "n" || return
+  confirm "Точно удалить '$base'?" "n" "Уберёт пир из реестра и живого туннеля. Переподключиться он не сможет — конфиг придётся выдавать заново." || return
   # снять маршрут, если был
   ( . "$f"; [ -n "${SUBNET:-}" ] && ip route del "$SUBNET" dev "$IFACE" 2>/dev/null || true )
   rm -f "$f" "${f%.peer}.conf"
@@ -611,7 +611,7 @@ peer_show_conf(){
   echo; info "=== $base ==="
   cat "$f"
   echo
-  confirm "QR?" "n" && qrencode -t ansiutf8 < "$f"
+  confirm "Показать QR?" "n" "QR текущего .conf для сканирования в AmneziaVPN. N — оставить только текст выше." && qrencode -t ansiutf8 < "$f"
   pause
 }
 
@@ -648,7 +648,7 @@ peer_reissue_client(){
   title "Обновлённый .conf клиента $base"
   cat "$f"
   echo
-  if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y"; then
+  if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y" "Y — QR для сканирования в приложении. N — только текстовый .conf выше."; then
     qrencode -t ansiutf8 < "$f" || warn "qrencode недоступен."
   fi
   warn "Перенеси обновлённый .conf/QR на устройство НАПРЯМУЮ (scp), не через Clash."
