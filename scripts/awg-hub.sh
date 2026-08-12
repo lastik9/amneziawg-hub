@@ -514,7 +514,9 @@ EOF
   cat "$conf"
   echo
   if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y" "Y — QR для сканирования в приложении. N — только текстовый .conf выше."; then
+    clear 2>/dev/null || true
     qrencode -t ansiutf8 < "$conf" || warn "qrencode недоступен."
+    info "QR большой — если не влезает, уменьши шрифт терминала (Cmd/Ctrl -) или прокрути вверх."
   fi
   warn "Переноси .conf на устройство НАПРЯМУЮ (scp), не через Clash."
   pause
@@ -611,7 +613,11 @@ peer_show_conf(){
   echo; info "=== $base ==="
   cat "$f"
   echo
-  confirm "Показать QR?" "n" "QR текущего .conf для сканирования в AmneziaVPN. N — оставить только текст выше." && qrencode -t ansiutf8 < "$f"
+  if confirm "Показать QR?" "n" "QR текущего .conf для сканирования в AmneziaVPN. N — оставить только текст выше."; then
+    clear 2>/dev/null || true
+    qrencode -t ansiutf8 < "$f" || warn "qrencode недоступен."
+    info "QR большой — если не влезает, уменьши шрифт терминала (Cmd/Ctrl -) или прокрути вверх."
+  fi
   pause
 }
 
@@ -649,7 +655,9 @@ peer_reissue_client(){
   cat "$f"
   echo
   if confirm "Показать QR (для AmneziaVPN на телефоне)?" "y" "Y — QR для сканирования в приложении. N — только текстовый .conf выше."; then
+    clear 2>/dev/null || true
     qrencode -t ansiutf8 < "$f" || warn "qrencode недоступен."
+    info "QR большой — если не влезает, уменьши шрифт терминала (Cmd/Ctrl -) или прокрути вверх."
   fi
   warn "Перенеси обновлённый .conf/QR на устройство НАПРЯМУЮ (scp), не через Clash."
   pause
