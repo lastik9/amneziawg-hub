@@ -106,6 +106,14 @@ grep -E "^(ADDRESSES|PEER_PUBLIC_KEY)=" /root/awg.env
 printf '%s' "$NODE_PRIV" | awg pubkey        # должно совпасть с PUBKEY выше
 ```
 
+> 🅰️ **Узел через wstunnel (дорога A)?** Шаблон выше — для **прямого** UDP
+> (endpoint = публичный IP хаба). Если узел заворачивает AWG в WSS через локальный
+> wstunnel client, endpoint должен быть `127.0.0.1:51820`, плюс блок
+> `WSTUNNEL_FRONT='1'` / `HUB_WSS_*`. Не правь руками — сгенерируй из `.conf` хаба:
+> `sh setup-awg.sh --from-conf hub.conf --wstunnel`. Детали и что ещё нужно поднять
+> (сам wstunnel client, маршрут через прокси) — в
+> [`docs/03-router-prep.md`](docs/03-router-prep.md) §6a.
+
 ---
 
 ## Шаг 3 — на ХАБЕ: завести site-пир (единственное касание хаба)
@@ -253,6 +261,11 @@ ping 192.168.1.1          # LAN другого site-узла (города)
 ```sh
 sh setup-awg.sh --mesh --no-install --reconnect
 ```
+
+> 🅰️ На wstunnel-узле (дорога A) держи в env `WSTUNNEL_FRONT='1'` — тогда обычный
+> `--reconnect` сам оставит endpoint на `127.0.0.1:51820`. Если маркера в env нет —
+> добавь флаг: `... --reconnect --wstunnel`, иначе reconnect впишет публичный IP и
+> уронит меш.
 
 ---
 

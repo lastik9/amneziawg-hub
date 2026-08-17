@@ -18,6 +18,11 @@
 #                                         # какие порты узла открывать из меша (дефолт: 22 80 443 9090;
 #                                         # 9090 = Clash-панель, нужен только ssclash-узлам). Также env ADMIN_PORTS=
 #   sh setup-awg.sh --mesh --reconnect    # обновить пир (ключ/endpoint/allowed_ips хаба) без пересоздания
+#   sh setup-awg.sh --wstunnel            # дорога A: AWG-фронт через локальный wstunnel client.
+#                                         # AWG endpoint пинуется на 127.0.0.1:51820 (лок. порт wstunnel),
+#                                         # реальный WSS-таргет хаба (publIP:443) кладётся в HUB_WSS_*.
+#                                         # Комбинируется с --from-conf (сгенерит правильный env) и с
+#                                         # --reconnect (никогда не вернёт публичный IP в endpoint).
 #   sh setup-awg.sh --check               # САМОПРОВЕРКА узла (read-only): iface/пир-хаб/маршруты/
 #                                         # nft/src_ip(#18)/masq/ping — PASS/FAIL. Ничего не меняет.
 #
@@ -45,6 +50,8 @@ ADMIN_IPS=''        # кому открыть LuCI/SSH узла из меша (-
 NO_ADMIN=0          # 1 = НЕ открывать управление узла из меша (--no-admin)
 RECONNECT=0         # 1 = обновить существующий интерфейс (ключ хаба/endpoint/allowed_ips), см. --reconnect
 CHECK_MODE=0        # 1 = только самопроверка узла (read-only), см. --check
+WSTUNNEL_FRONT=0    # 1 = узел фронтит AWG через локальный wstunnel client (endpoint=127.0.0.1), см. --wstunnel (дорога A)
+WSTUNNEL_LOCAL_PORT=51820  # локальный udp-порт wstunnel client, на который смотрит AWG endpoint
 MESH_SUBNET='10.0.0.0/24'  # источник по умолчанию для доступа к управлению узла в mesh-режиме
 ADMIN_PORTS="${ADMIN_PORTS:-22 80 443 9090}"  # порты узла из меша (env ADMIN_PORTS= / флаг --admin-ports). Дефолт: SSH(22)/LuCI(80,443)+Clash(9090); 9090 нужен только ssclash-узлам
 SHARED_ZONE='awg'   # общая зона для всех awg-интерфейсов
@@ -69,6 +76,7 @@ while [ $# -gt 0 ]; do
     --admin-ports) ADMIN_PORTS="${2:-}"; shift 2 || die "--admin-ports требует список портов через пробел (в кавычках)" ;;
     --no-admin) NO_ADMIN=1; shift ;;
     --reconnect) RECONNECT=1; shift ;;
+    --wstunnel) WSTUNNEL_FRONT=1; shift ;;
     --check) CHECK_MODE=1; shift ;;
     --env) ENV_FILE="${2:-}"; shift 2 || die "--env требует путь" ;;
     -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -233,8 +241,20 @@ write_env() {
     echo "I1='$(conf_geti1 "$_conf")'"
     echo "PEER_PUBLIC_KEY='$(conf_get PublicKey "$_conf")'"
     echo "PRESHARED_KEY='$(conf_get PresharedKey "$_conf")'"
-    echo "ENDPOINT_HOST='$_eh'"
-    echo "ENDPOINT_PORT='$_epp'"
+    if [ "${WSTUNNEL_FRONT:-0}" = 1 ]; then
+      # дорога A: AWG смотрит на локальный wstunnel client, а публичный endpoint
+      # из .conf (реальный WSS-таргет хаба) сохраняем в HUB_WSS_* — для wstunnel и отката.
+      _wlp="${WSTUNNEL_LOCAL_PORT:-51820}"
+      echo "WSTUNNEL_FRONT='1'"
+      echo "WSTUNNEL_LOCAL_PORT='$_wlp'"
+      echo "HUB_WSS_HOST='$_eh'"
+      echo "HUB_WSS_PORT='$_epp'"
+      echo "ENDPOINT_HOST='127.0.0.1'"
+      echo "ENDPOINT_PORT='$_wlp'"
+    else
+      echo "ENDPOINT_HOST='$_eh'"
+      echo "ENDPOINT_PORT='$_epp'"
+    fi
     echo "ALLOWED_IPS='$(conf_get AllowedIPs "$_conf")'"
     echo "KEEPALIVE='$(conf_get PersistentKeepalive "$_conf")'"
     echo "MAKE_ZONE='1'"
@@ -338,6 +358,22 @@ fi
 [ -n "${ENDPOINT_HOST:-}" ]   || die "ENDPOINT_HOST пуст"
 [ -n "${ENDPOINT_PORT:-}" ]   || die "ENDPOINT_PORT пуст"
 [ -n "${ADDRESSES:-}" ]       || die "ADDRESSES пуст"
+
+# ---------- дорога A: wstunnel-фронт (endpoint → локальный loopback) ----------
+# Если узел фронтит AWG через локальный wstunnel client, AWG-пир должен смотреть
+# на 127.0.0.1:<локальный порт>, а НЕ на публичный IP хаба. Реальный WSS-таргет
+# (публ. IP:порт) запоминаем в HUB_WSS_* — для самого wstunnel и для отката на
+# прямой UDP. Врезка стоит ДО create И ДО reconnect, поэтому reconnect физически
+# не сможет вернуть публичный IP в endpoint, пока в env стоит WSTUNNEL_FRONT=1.
+# Каноничный env wstunnel-узла: ENDPOINT_HOST='127.0.0.1' + WSTUNNEL_FRONT='1' +
+# HUB_WSS_*=публичный (тогда --check тоже видит согласованный loopback).
+if [ "${WSTUNNEL_FRONT:-0}" = 1 ]; then
+  : "${HUB_WSS_HOST:=${ENDPOINT_HOST:-}}"
+  : "${HUB_WSS_PORT:=${ENDPOINT_PORT:-}}"
+  ENDPOINT_HOST='127.0.0.1'
+  ENDPOINT_PORT="${WSTUNNEL_LOCAL_PORT:-51820}"
+  log "wstunnel-фронт: AWG endpoint → $ENDPOINT_HOST:$ENDPOINT_PORT (WSS хаба = ${HUB_WSS_HOST:-?}:${HUB_WSS_PORT:-?})"
+fi
 
 command -v uci >/dev/null || die "uci не найден — это точно OpenWrt?"
 
