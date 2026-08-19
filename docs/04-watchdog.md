@@ -40,3 +40,11 @@
 - **GUARD «кто я»** в каждом скрипте + правило: любая команда ЗАПИСИ на узел начинается с преамбулы-guard
   `[ "$(awg show interfaces 2>/dev/null | head -1)" = "ОЖИДАЕМЫЙ_IFACE" ] || { echo ABORT; exit 0; }`
   чтобы heredoc не мог выполниться не на том узле.
+
+## Развёртывания (журнал)
+
+### hub53 — direct-UDP, `awg_hub53` (v24)
+
+Watchdog развёрнут из `scripts/mesh-watchdog-directudp.sh` (`__SET_IFACE__` → `awg_hub53` в оба места). Крон `*/5` в `/etc/crontabs/root`, crond активен. Ступень 1 (self-heal прямого UDP: `ifdown/ifup`→90с→reboot, ≤1/час) — боевая. `sh -x`-ворота на живом меше прошли зелёно: guard не сработал, первая ветка `exit 0`, без ifdown/ifup/reboot.
+
+**Снята ложная граблина из v23.** В v23 `awg show awg_hub53 latest-handshakes` вернул `No such device`, хотя `awg show` без аргумента показывал `interface: awg_hub53` — это было записано как возможное расхождение kernel-iface ↔ uci-секции. Эмпирически (v24) на hub53 расхождения **НЕТ**: имя `awg_hub53` совпадает во всех источниках — `uci`, `awg show interfaces`, `awg show`, `ip link` (`21: awg_hub53`), и адресный запрос `awg show awg_hub53 latest-handshakes` отвечает нормально. Тот `No such device` был **транзиентным**: iface моргнул (down) ровно в момент замера при переподключении меша. Практика «брать имя из `awg show interfaces`» остаётся верной, но конкретно hub53 расхождения имён не имеет.
