@@ -7,7 +7,7 @@
 | Файл | Для узла | Лесенка восстановления |
 |---|---|---|
 | `scripts/mesh-watchdog-village.sh` | **дорога A** (AWG-in-WSS через clash+wstunnel), напр. деревня `awg_hub52` | протух → `clash restart` → 90с → `wstunnel restart` → 90с → `reboot` |
-| `scripts/mesh-watchdog-directudp.sh` | **direct-UDP** (AWG-пир смотрит прямо на публичный IP хаба, без clash в тракте), напр. hub53 | протух → `ifdown/ifup` awg → 90с → `reboot` |
+| `scripts/mesh-watchdog-directudp.sh` | **direct-UDP** (AWG-пир смотрит прямо на публичный IP хаба, без clash в тракте) | протух → `ifdown/ifup` awg → 90с → `reboot` |
 
 Общие параметры обоих: `MAX_AGE=300` (хендшейк старше 5 мин = мёртв), `REBOOT_COOLDOWN=3600` (ребут не чаще 1/час), маркер кулдауна `/tmp/mesh-wd-last-reboot` (в tmpfs — чистится ребутом, кулдаун снимается после перезагрузки).
 
@@ -48,3 +48,17 @@
 Watchdog развёрнут из `scripts/mesh-watchdog-directudp.sh` (`__SET_IFACE__` → `awg_hub53` в оба места). Крон `*/5` в `/etc/crontabs/root`, crond активен. Ступень 1 (self-heal прямого UDP: `ifdown/ifup`→90с→reboot, ≤1/час) — боевая. `sh -x`-ворота на живом меше прошли зелёно: guard не сработал, первая ветка `exit 0`, без ifdown/ifup/reboot.
 
 **Снята ложная граблина из v23.** В v23 `awg show awg_hub53 latest-handshakes` вернул `No such device`, хотя `awg show` без аргумента показывал `interface: awg_hub53` — это было записано как возможное расхождение kernel-iface ↔ uci-секции. Эмпирически (v24) на hub53 расхождения **НЕТ**: имя `awg_hub53` совпадает во всех источниках — `uci`, `awg show interfaces`, `awg show`, `ip link` (`21: awg_hub53`), и адресный запрос `awg show awg_hub53 latest-handshakes` отвечает нормально. Тот `No such device` был **транзиентным**: iface моргнул (down) ровно в момент замера при переподключении меша. Практика «брать имя из `awg show interfaces`» остаётся верной, но конкретно hub53 расхождения имён не имеет.
+
+### hub53 — ПЕРЕВЕДЁН на дорогу A, `awg_hub53` (v24, 2026-08-20)
+
+**Смена режима.** hub53 переключён с direct-UDP на **дорогу A** (AWG-in-WSS через clash+wstunnel), теперь работает как деревня. Причина: превентивно, до удара whitelist по прямому UDP. Прямой UDP исправен и оставлен **ручным резервом** (см. `docs/05-hub53-road-a.md`).
+
+Что изменено на узле:
+- `uci endpoint_host` = `127.0.0.1:51820` (было `138.16.178.138:443`) — меш идёт в локальный wstunnel → clash → hub:443/WSS.
+- `wstunnel` init: `enable`+`start` (был disabled). Бинарь `wstunnel-cli 10.5.5` в `/usr/bin` (overlay, переживает reboot).
+- `awg.env`: `WSTUNNEL_FRONT='1'` (был `0`). ENDPOINT_HOST в env оставлен публичным (`138.16.178.138`) — память для ручного отката; расходится с боевым uci (loopback) намеренно.
+- **watchdog заменён**: с directudp-шаблона (`ifdown/ifup`) на village-лесенку (`clash restart → wstunnel restart → reboot`), т.к. на дороге A чинить надо транспорт, а не интерфейс. Боевой скрипт: `scripts/mesh-watchdog-hub53.sh`. `sh -x`-ворота на живом меше зелёные.
+
+**Переключение делалось со sleep-сторожем** (фоновый откат на прямой UDP через 180с при непод­нятии дороги A) — hub53 без входящих, поэтому любое переключение обкладывается таймерным откатом. Сторож отработал `keep` (дорога A поднялась, age~8s), меш не падал. Сквозной ping города 0% loss (латентность выросла ~42мс→~147мс — крюк через clash-ноду, приемлемо).
+
+**Durable про clash-ноды:** при подготовке WSS-нога один раз дала таймаут (`curl (28)`) — конкретная clash-нода деградировала. Смена ноды в clash починила. Вывод: перед переключением на дорогу A ВСЕГДА проверять WSS-ногу «сейчас» (`curl -x :7890 -k https://hub:443` → ждём `tls>0 http=400`), нода могла лечь.
