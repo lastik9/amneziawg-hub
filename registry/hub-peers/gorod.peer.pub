@@ -1,0 +1,7 @@
+NAME="gorod"
+TYPE="site"
+PUBKEY="Jvwx9gQph2LM05zticyL7GkXXa7F73JN8FxJKS90fC8="
+WG_IP="10.0.0.2"
+SUBNET="192.168.1.0/24"
+PSK="<redacted>"
+DESC="forkop - город"

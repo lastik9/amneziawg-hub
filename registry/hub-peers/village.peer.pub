@@ -1,0 +1,7 @@
+NAME="village"
+TYPE="site"
+PUBKEY="UJyml0EDxPW3/DSiC+/Fme6jjnVaT5MfY41wTud+Y1Y="
+WG_IP="10.0.0.3"
+SUBNET="192.168.52.0/24"
+PSK="<redacted>"
+DESC="деревня ыssclash"

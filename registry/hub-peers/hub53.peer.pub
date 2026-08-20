@@ -1,0 +1,7 @@
+NAME="hub53"
+TYPE="site"
+PUBKEY="y0epVzqkK+GEN7ekA553S1rAHzzeuonkQ40gSPR9WgM="
+WG_IP="10.0.0.4"
+SUBNET="192.168.53.0/24"
+PSK="<redacted>"
+DESC="huasifei ssclash"
