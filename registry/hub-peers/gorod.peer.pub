@@ -1,6 +1,6 @@
 NAME="gorod"
 TYPE="site"
-PUBKEY="xRze/92IS4QQOICGSL03A+hncHvbyEOSO5SaKO7cq0s="
+PUBKEY="/3zo9iHvtuB3Y6FzN6Pt7KcEmlk4DEDlehFfE/nYvBQ="
 WG_IP="10.0.0.2"
 SUBNET="192.168.1.0/24"
 PSK="<redacted>"
