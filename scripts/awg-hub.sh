@@ -189,7 +189,7 @@ render_config(){   # рендер awg0.conf целиком из состояни
   priv="$(cat "$SRV_KEY")"
   mkdir -p "$AWG_DIR"
   postup=""
-  while read -r s; do [ -n "$s" ] && postup+="ip route add $s dev %i 2>/dev/null; "; done < <(gather_subnets)
+  while read -r s; do [ -n "$s" ] && postup+="ip route replace $s dev %i 2>/dev/null || true; "; done < <(gather_subnets)
 
   {
     echo "[Interface]"
